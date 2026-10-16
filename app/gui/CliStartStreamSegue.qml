@@ -23,12 +23,23 @@ Item {
     }
 
     function onLaunchFailed(message) {
+        if (launcherMode) {
+            console.error("LAUNCHER-ERROR: " + message)
+            Qt.exit(3)
+            return
+        }
         errorDialog.text = message
         errorDialog.open()
         console.error(message)
     }
 
     function onAppQuitRequired(appName) {
+        if (launcherMode) {
+            // The launcher asks the user before (and quits the running app itself).
+            console.error("LAUNCHER-APP-RUNNING: " + appName)
+            Qt.exit(4)
+            return
+        }
         quitAppDialog.appName = appName
         quitAppDialog.open()
     }

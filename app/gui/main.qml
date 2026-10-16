@@ -36,7 +36,10 @@ ApplicationWindow {
 
     Component.onCompleted: {
         // Show the window according to the user's preferences
-        if (SystemProperties.hasDesktopEnvironment) {
+        if (launcherMode) {
+            // Moonlight Launcher shows its own UI; only the stream window appears.
+        }
+        else if (SystemProperties.hasDesktopEnvironment) {
             if (StreamingPreferences.uiDisplayMode == StreamingPreferences.UI_MAXIMIZED) {
                 window.showMaximized()
             }

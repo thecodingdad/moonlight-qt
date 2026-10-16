@@ -40,6 +40,10 @@ Item {
 
         // Hide the window now that streaming has begun
         window.visible = false
+
+        if (launcherMode) {
+            console.error("LAUNCHER-STREAMING")
+        }
     }
 
     function displayLaunchError(text)
@@ -56,7 +60,9 @@ Item {
         stackView.replace(stackView.currentItem, component.createObject(stackView, {"appName": appName}), StackView.Immediate)
 
         // Show the Qt window again to show quit segue
-        window.visible = true
+        if (!launcherMode) {
+            window.visible = true
+        }
     }
 
     function sessionFinished(portTestResult)
@@ -76,6 +82,11 @@ Item {
         if (quitAfter && !streamSegueErrorDialog.text) {
             // If this was a CLI launch without errors, exit now
             Qt.quit()
+        }
+        else if (launcherMode) {
+            // The launcher shows the error in its own UI.
+            console.error("LAUNCHER-ERROR: " + streamSegueErrorDialog.text)
+            Qt.exit(3)
         }
         else {
             // Show the Qt window again after streaming
