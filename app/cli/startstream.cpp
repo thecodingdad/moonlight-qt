@@ -142,6 +142,17 @@ public:
 
     int getAppIndex() const
     {
+        // Moonlight Launcher: "appid:<id>" selects the app by its id (names may repeat).
+        if (m_AppName.startsWith("appid:")) {
+            bool ok = false;
+            int id = m_AppName.mid(6).toInt(&ok);
+            for (int i = 0; ok && i < m_Computer->appList.length(); i++) {
+                if (m_Computer->appList[i].id == id) {
+                    return i;
+                }
+            }
+            return -1;
+        }
         for (int i = 0; i < m_Computer->appList.length(); i++) {
             if (m_Computer->appList[i].name.toLower() == m_AppName.toLower()) {
                 return i;
