@@ -16,8 +16,10 @@
 #include <QUdpSocket>
 #include <stdexcept>
 
-#define FAST_FAIL_TIMEOUT_MS 2000
-#define REQUEST_TIMEOUT_MS 5000
+// Started by a launcher (MOONLIGHT_LAUNCHER_MODE): it has checked the host already, and busy
+// hosts (Vibepollo with many apps answers HTTPS requests one after the other) can take longer.
+#define FAST_FAIL_TIMEOUT_MS (qEnvironmentVariableIsSet("MOONLIGHT_LAUNCHER_MODE") ? 10000 : 2000)
+#define REQUEST_TIMEOUT_MS (qEnvironmentVariableIsSet("MOONLIGHT_LAUNCHER_MODE") ? 20000 : 5000)
 #define LAUNCH_TIMEOUT_MS 120000
 #define RESUME_TIMEOUT_MS 30000
 #define QUIT_TIMEOUT_MS 30000

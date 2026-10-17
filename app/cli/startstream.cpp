@@ -6,7 +6,8 @@
 #include <QCoreApplication>
 #include <QTimer>
 
-#define COMPUTER_SEEK_TIMEOUT 30000
+// A launcher (MOONLIGHT_LAUNCHER_MODE) waits longer for a busy host.
+#define COMPUTER_SEEK_TIMEOUT (qEnvironmentVariableIsSet("MOONLIGHT_LAUNCHER_MODE") ? 90000 : 30000)
 #define APP_SEEK_TIMEOUT 10000
 
 namespace CliStartStream
