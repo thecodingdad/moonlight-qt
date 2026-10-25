@@ -17,12 +17,14 @@
 #endif
 
 std::atomic<bool> LauncherControl::s_Stats { false };
+std::atomic<bool> LauncherControl::s_Active { false };
 
 void LauncherControl::start()
 {
     if (!qEnvironmentVariableIsSet("MOONLIGHT_LAUNCHER_MODE")) {
         return;
     }
+    s_Active = true;
 
     std::thread([] {
         std::string line;
@@ -84,6 +86,22 @@ void LauncherControl::handle(const char* line)
     }
     else if (std::strcmp(line, "stats off") == 0) {
         s_Stats = false;
+    }
+    else if (std::strcmp(line, "mouse") == 0 || std::strcmp(line, "overlay") == 0) {
+        bool mouse = std::strcmp(line, "mouse") == 0;
+        QMetaObject::invokeMethod(QCoreApplication::instance(), [mouse] {
+            Session* session = Session::get();
+            if (session == nullptr) {
+                return;
+            }
+            if (mouse) {
+                session->toggleGamepadMouse();
+            }
+            else {
+                Overlay::OverlayManager& overlays = session->getOverlayManager();
+                overlays.setOverlayState(Overlay::OverlayDebug, !overlays.isStatsEnabled());
+            }
+        }, Qt::QueuedConnection);
     }
     else if (std::strncmp(line, "servercmd ", 10) == 0) {
         int index = std::atoi(line + 10);

@@ -148,6 +148,9 @@ public:
     // Exit after the stream without quitting the host app (launcher control "disconnect").
     void setShouldExitKeepingApp();
 
+    // Gamepad mouse emulation of all gamepads on / off (launcher control "mouse").
+    void toggleGamepadMouse();
+
 signals:
     void stageStarting(QString stage);
 

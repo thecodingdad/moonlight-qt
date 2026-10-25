@@ -2001,6 +2001,13 @@ void Session::flushWindowEvents()
     SDL_PushEvent(&flushEvent);
 }
 
+void Session::toggleGamepadMouse()
+{
+    if (m_InputHandler != nullptr) {
+        m_InputHandler->toggleGamepadMouse();
+    }
+}
+
 void Session::setShouldExitKeepingApp()
 {
     // Leave the stream but keep the app running on the host, whatever the preferences say.

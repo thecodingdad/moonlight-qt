@@ -73,6 +73,9 @@ public:
 
     void handleControllerAxisEvent(SDL_ControllerAxisEvent* event);
 
+    // Mouse emulation of all gamepads on / off (all follow the first one's state).
+    void toggleGamepadMouse();
+
     void handleControllerButtonEvent(SDL_ControllerButtonEvent* event);
 
     void initializeControllers();

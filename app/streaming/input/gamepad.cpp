@@ -1,5 +1,6 @@
 #include <ControllerHaptics.h>
 #include "streaming/session.h"
+#include "streaming/launchercontrol.h"
 
 #include <Limelight.h>
 #include "SDL_compat.h"
@@ -149,6 +150,41 @@ void SdlInputHandler::sendGamepadBatteryState(GamepadState* state, SDL_JoystickP
     }
 
     LiSendControllerBatteryEvent(state->index, batteryState, batteryPercentage);
+}
+
+void SdlInputHandler::toggleGamepadMouse()
+{
+    bool turnOn = true;
+    for (int i = 0; i < MAX_GAMEPADS; i++) {
+        if (m_GamepadState[i].controller != nullptr && m_GamepadState[i].mouseEmulationTimer != 0) {
+            turnOn = false;
+            break;
+        }
+    }
+
+    bool any = false;
+    for (int i = 0; i < MAX_GAMEPADS; i++) {
+        GamepadState* state = &m_GamepadState[i];
+        if (state->controller == nullptr) {
+            continue;
+        }
+        any = true;
+        if (!turnOn && state->mouseEmulationTimer != 0) {
+            SDL_RemoveTimer(state->mouseEmulationTimer);
+            state->mouseEmulationTimer = 0;
+        }
+        else if (turnOn && state->mouseEmulationTimer == 0) {
+            // The buttons held for the combination are let go on the host first.
+            state->buttons = 0;
+            sendGamepadState(state);
+            state->mouseEmulationTimer = SDL_AddTimer(MOUSE_EMULATION_POLLING_INTERVAL, SdlInputHandler::mouseEmulationTimerCallback, state);
+        }
+    }
+
+    if (any) {
+        SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION, "Mouse emulation %s (launcher)", turnOn ? "active" : "deactivated");
+        Session::get()->notifyMouseEmulationMode(turnOn);
+    }
 }
 
 Uint32 SdlInputHandler::mouseEmulationTimerCallback(Uint32 interval, void *param)
@@ -321,7 +357,7 @@ void SdlInputHandler::handleControllerButtonEvent(SDL_ControllerButtonEvent* eve
         state->buttons &= ~k_ButtonMap[event->button];
 
         if (event->button == SDL_CONTROLLER_BUTTON_START) {
-            if (SDL_GetTicks() - state->lastStartDownTime > MOUSE_EMULATION_LONG_PRESS_TIME) {
+            if (!LauncherControl::active() && SDL_GetTicks() - state->lastStartDownTime > MOUSE_EMULATION_LONG_PRESS_TIME) {
                 if (state->mouseEmulationTimer != 0) {
                     SDL_RemoveTimer(state->mouseEmulationTimer);
                     state->mouseEmulationTimer = 0;
@@ -362,7 +398,7 @@ void SdlInputHandler::handleControllerButtonEvent(SDL_ControllerButtonEvent* eve
     }
 
     // Handle Start+Select+L1+R1 as a gamepad quit combo
-    if (state->buttons == (PLAY_FLAG | BACK_FLAG | LB_FLAG | RB_FLAG) && qgetenv("NO_GAMEPAD_QUIT") != "1") {
+    if (state->buttons == (PLAY_FLAG | BACK_FLAG | LB_FLAG | RB_FLAG) && qgetenv("NO_GAMEPAD_QUIT") != "1" && !LauncherControl::active()) {
         SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION,
                     "Detected quit gamepad button combo");
 
@@ -379,7 +415,7 @@ void SdlInputHandler::handleControllerButtonEvent(SDL_ControllerButtonEvent* eve
     }
 
     // Handle Select+L1+R1+X as a gamepad overlay combo
-    if (state->buttons == (BACK_FLAG | LB_FLAG | RB_FLAG | X_FLAG)) {
+    if (state->buttons == (BACK_FLAG | LB_FLAG | RB_FLAG | X_FLAG) && !LauncherControl::active()) {
         SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION,
                     "Detected stats toggle gamepad combo");
 
@@ -394,7 +430,7 @@ void SdlInputHandler::handleControllerButtonEvent(SDL_ControllerButtonEvent* eve
     }
 
     // Handle Select+L1+R1+Y (Triangle) as the frametime graph combo
-    if (state->buttons == (BACK_FLAG | LB_FLAG | RB_FLAG | Y_FLAG)) {
+    if (state->buttons == (BACK_FLAG | LB_FLAG | RB_FLAG | Y_FLAG) && !LauncherControl::active()) {
         SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION,
                     "Detected frametime graph toggle gamepad combo");
 
