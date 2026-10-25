@@ -2001,6 +2001,13 @@ void Session::flushWindowEvents()
     SDL_PushEvent(&flushEvent);
 }
 
+void Session::setShouldExitKeepingApp()
+{
+    // Leave the stream but keep the app running on the host, whatever the preferences say.
+    m_Preferences->quitAppAfter = false;
+    m_ShouldExit = true;
+}
+
 void Session::setShouldExit(bool quitHostApp)
 {
     // If the caller has explicitly asked us to quit the host app,

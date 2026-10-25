@@ -204,6 +204,7 @@ SOURCES += \
     streaming/input/mouse.cpp \
     streaming/input/reltouch.cpp \
     streaming/session.cpp \
+    streaming/launchercontrol.cpp \
     streaming/gpuperformancehold.cpp \
     streaming/gamescopecomposition.cpp \
     streaming/audio/audio.cpp \
@@ -259,6 +260,7 @@ HEADERS += \
     streaming/input/dualsensehaptics.h \
     streaming/input/input.h \
     streaming/session.h \
+    streaming/launchercontrol.h \
     streaming/gpuperformancehold.h \
     streaming/video/amddecodepolicy.h \
     streaming/video/pyrowave/pyrowavecalibrator.h \

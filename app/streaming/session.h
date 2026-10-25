@@ -145,6 +145,9 @@ public:
 
     void setShouldExit(bool quitHostApp = false);
 
+    // Exit after the stream without quitting the host app (launcher control "disconnect").
+    void setShouldExitKeepingApp();
+
 signals:
     void stageStarting(QString stage);
 

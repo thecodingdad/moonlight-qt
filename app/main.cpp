@@ -59,6 +59,7 @@
 #include "backend/networkbuffers.h"
 #include "gui/sdlgamepadkeynavigation.h"
 #include "windowsvblankvirtualization.h"
+#include "streaming/launchercontrol.h"
 
 #if defined(Q_OS_WIN32)
 #define IS_UNSPECIFIED_HANDLE(x) ((x) == INVALID_HANDLE_VALUE || (x) == NULL)
@@ -1121,6 +1122,8 @@ int main(int argc, char *argv[])
         engine.rootContext()->setContextProperty("runConfigChecks", commandLineParserResult == GlobalCommandLineParser::NormalStartRequested);
         // Moonlight Launcher: started by the launcher, which shows progress and errors itself.
         engine.rootContext()->setContextProperty("launcherMode", qEnvironmentVariableIsSet("MOONLIGHT_LAUNCHER_MODE"));
+        // Commands from the launcher (quit, disconnect, stats, server commands).
+        LauncherControl::start();
 
         // Load the main.qml file
         engine.load(QUrl(QStringLiteral("qrc:/gui/main.qml")));

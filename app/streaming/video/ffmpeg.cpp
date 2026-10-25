@@ -4,6 +4,7 @@
 #include "videothreadpriority.h"
 #include "utils.h"
 #include "streaming/session.h"
+#include "streaming/launchercontrol.h"
 #include "diagnostics/gputrace.h"
 
 #ifdef HAVE_H264BITSTREAM
@@ -3132,17 +3133,23 @@ int FFmpegVideoDecoder::submitDecodeUnit(PDECODE_UNIT du)
         // this decoder-owned window is read, accumulated, and reset.
         syncPacerTelemetry();
 
-        // Update overlay stats if it's enabled
-        if (Session::get()->getOverlayManager().isStatsEnabled()) {
+        // Update overlay stats if it's enabled (or the embedding launcher shows them)
+        bool overlayStats = Session::get()->getOverlayManager().isStatsEnabled();
+        if (overlayStats || LauncherControl::statsWanted()) {
             VIDEO_STATS lastTwoWndStats = {};
             addVideoStats(m_LastWndVideoStats, lastTwoWndStats);
             addVideoStats(m_ActiveWndVideoStats, lastTwoWndStats);
 
             char text[4096];
             stringifyVideoStats(lastTwoWndStats, text, sizeof(text));
-            Session::get()->getOverlayManager().updateOverlayText(Overlay::OverlayDebug, text,
-                m_Pacer && Session::get()->getOverlayManager().isTimingGraphEnabled() ?
-                    m_Pacer->timingGraphSnapshot() : Overlay::TimingGraphSnapshot{});
+            if (overlayStats) {
+                Session::get()->getOverlayManager().updateOverlayText(Overlay::OverlayDebug, text,
+                    m_Pacer && Session::get()->getOverlayManager().isTimingGraphEnabled() ?
+                        m_Pacer->timingGraphSnapshot() : Overlay::TimingGraphSnapshot{});
+            }
+            if (LauncherControl::statsWanted()) {
+                LauncherControl::publishStats(text);
+            }
         }
 
         // Accumulate these values into the global stats
