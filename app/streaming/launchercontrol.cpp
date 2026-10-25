@@ -18,6 +18,9 @@
 
 std::atomic<bool> LauncherControl::s_Stats { false };
 std::atomic<bool> LauncherControl::s_Active { false };
+std::atomic<bool> LauncherControl::s_Mouse { false };
+std::atomic<float> LauncherControl::s_MouseSpeed { 1200.0f };
+std::atomic<float> LauncherControl::s_MouseExponent { 2.4f };
 
 void LauncherControl::start()
 {
@@ -25,6 +28,16 @@ void LauncherControl::start()
         return;
     }
     s_Active = true;
+    s_Mouse = qgetenv("MOONLIGHT_LAUNCHER_MOUSE") == "1";
+    bool ok = false;
+    float speed = qEnvironmentVariable("MOONLIGHT_LAUNCHER_MOUSE_SPEED").toFloat(&ok);
+    if (ok && speed > 0) {
+        s_MouseSpeed = speed;
+    }
+    float exponent = qEnvironmentVariable("MOONLIGHT_LAUNCHER_MOUSE_EXPONENT").toFloat(&ok);
+    if (ok && exponent > 0) {
+        s_MouseExponent = exponent;
+    }
 
     std::thread([] {
         std::string line;
@@ -87,17 +100,27 @@ void LauncherControl::handle(const char* line)
     else if (std::strcmp(line, "stats off") == 0) {
         s_Stats = false;
     }
-    else if (std::strcmp(line, "mouse") == 0 || std::strcmp(line, "overlay") == 0) {
-        bool mouse = std::strcmp(line, "mouse") == 0;
-        QMetaObject::invokeMethod(QCoreApplication::instance(), [mouse] {
+    else if (std::strcmp(line, "mouse on") == 0 || std::strcmp(line, "mouse off") == 0) {
+        bool on = std::strcmp(line, "mouse on") == 0;
+        s_Mouse = on;
+        QMetaObject::invokeMethod(QCoreApplication::instance(), [on] {
             Session* session = Session::get();
-            if (session == nullptr) {
-                return;
+            if (session != nullptr) {
+                session->setGamepadMouse(on);
             }
-            if (mouse) {
-                session->toggleGamepadMouse();
-            }
-            else {
+        }, Qt::QueuedConnection);
+    }
+    else if (std::strncmp(line, "mouse speed ", 12) == 0) {
+        float speed = 0, exponent = 0;
+        if (std::sscanf(line + 12, "%f %f", &speed, &exponent) == 2 && speed > 0 && exponent > 0) {
+            s_MouseSpeed = speed;
+            s_MouseExponent = exponent;
+        }
+    }
+    else if (std::strcmp(line, "overlay") == 0) {
+        QMetaObject::invokeMethod(QCoreApplication::instance(), [] {
+            Session* session = Session::get();
+            if (session != nullptr) {
                 Overlay::OverlayManager& overlays = session->getOverlayManager();
                 overlays.setOverlayState(Overlay::OverlayDebug, !overlays.isStatsEnabled());
             }

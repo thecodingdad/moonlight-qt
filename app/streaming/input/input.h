@@ -21,6 +21,7 @@ struct GamepadState {
 
     SDL_TimerID mouseEmulationTimer;
     uint32_t lastStartDownTime;
+    float mouseRestX, mouseRestY;
 
     bool clickpadButtonEmulationEnabled;
     bool emulatedClickpadButtonDown;
@@ -73,8 +74,8 @@ public:
 
     void handleControllerAxisEvent(SDL_ControllerAxisEvent* event);
 
-    // Mouse emulation of all gamepads on / off (all follow the first one's state).
-    void toggleGamepadMouse();
+    // Mouse emulation of all gamepads on / off (launcher control).
+    void setGamepadMouse(bool on);
 
     void handleControllerButtonEvent(SDL_ControllerButtonEvent* event);
 
@@ -162,6 +163,8 @@ private:
     void sendControllerArrival(GamepadState* state);
 
     void sendGamepadState(GamepadState* state);
+
+    void startMouseEmulation(GamepadState* state);
 
     void sendGamepadBatteryState(GamepadState* state, SDL_JoystickPowerLevel level);
 

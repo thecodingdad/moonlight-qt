@@ -2001,10 +2001,10 @@ void Session::flushWindowEvents()
     SDL_PushEvent(&flushEvent);
 }
 
-void Session::toggleGamepadMouse()
+void Session::setGamepadMouse(bool on)
 {
     if (m_InputHandler != nullptr) {
-        m_InputHandler->toggleGamepadMouse();
+        m_InputHandler->setGamepadMouse(on);
     }
 }
 

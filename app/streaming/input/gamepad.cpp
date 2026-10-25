@@ -15,6 +15,7 @@
 
 // How long between polling the gamepad to send virtual mouse input
 #define MOUSE_EMULATION_POLLING_INTERVAL 50
+#define LAUNCHER_MOUSE_INTERVAL 10
 
 // Determines how fast the mouse will move each interval
 #define MOUSE_EMULATION_MOTION_MULTIPLIER 4
@@ -152,16 +153,8 @@ void SdlInputHandler::sendGamepadBatteryState(GamepadState* state, SDL_JoystickP
     LiSendControllerBatteryEvent(state->index, batteryState, batteryPercentage);
 }
 
-void SdlInputHandler::toggleGamepadMouse()
+void SdlInputHandler::setGamepadMouse(bool on)
 {
-    bool turnOn = true;
-    for (int i = 0; i < MAX_GAMEPADS; i++) {
-        if (m_GamepadState[i].controller != nullptr && m_GamepadState[i].mouseEmulationTimer != 0) {
-            turnOn = false;
-            break;
-        }
-    }
-
     bool any = false;
     for (int i = 0; i < MAX_GAMEPADS; i++) {
         GamepadState* state = &m_GamepadState[i];
@@ -169,22 +162,31 @@ void SdlInputHandler::toggleGamepadMouse()
             continue;
         }
         any = true;
-        if (!turnOn && state->mouseEmulationTimer != 0) {
+        if (!on && state->mouseEmulationTimer != 0) {
             SDL_RemoveTimer(state->mouseEmulationTimer);
             state->mouseEmulationTimer = 0;
         }
-        else if (turnOn && state->mouseEmulationTimer == 0) {
+        else if (on && state->mouseEmulationTimer == 0) {
             // The buttons held for the combination are let go on the host first.
             state->buttons = 0;
             sendGamepadState(state);
-            state->mouseEmulationTimer = SDL_AddTimer(MOUSE_EMULATION_POLLING_INTERVAL, SdlInputHandler::mouseEmulationTimerCallback, state);
+            startMouseEmulation(state);
         }
     }
 
     if (any) {
-        SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION, "Mouse emulation %s (launcher)", turnOn ? "active" : "deactivated");
-        Session::get()->notifyMouseEmulationMode(turnOn);
+        SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION, "Mouse emulation %s (launcher)", on ? "active" : "deactivated");
+        Session::get()->notifyMouseEmulationMode(on);
     }
+}
+
+void SdlInputHandler::startMouseEmulation(GamepadState* state)
+{
+    state->mouseRestX = 0;
+    state->mouseRestY = 0;
+    // In launcher mode a smooth rate (the launcher's speed curve), otherwise Moonlight's own.
+    state->mouseEmulationTimer = SDL_AddTimer(LauncherControl::active() ? LAUNCHER_MOUSE_INTERVAL : MOUSE_EMULATION_POLLING_INTERVAL,
+                                              SdlInputHandler::mouseEmulationTimerCallback, state);
 }
 
 Uint32 SdlInputHandler::mouseEmulationTimerCallback(Uint32 interval, void *param)
@@ -202,6 +204,26 @@ Uint32 SdlInputHandler::mouseEmulationTimerCallback(Uint32 interval, void *param
     else {
         rawX = gamepad->rsX;
         rawY = -gamepad->rsY;
+    }
+
+    if (LauncherControl::active()) {
+        // The launcher's curve: along the stick's direction, slow near the centre.
+        float nx = rawX / 32766.0f;
+        float ny = rawY / 32766.0f;
+        float magnitude = qMin(1.0f, qSqrt(nx * nx + ny * ny));
+        if (magnitude >= 0.1f) {
+            float step = LauncherControl::mouseSpeed() * qPow(magnitude, LauncherControl::mouseExponent()) * interval / 1000.0f / magnitude;
+            gamepad->mouseRestX += nx * step;
+            gamepad->mouseRestY += ny * step;
+            short dx = (short)gamepad->mouseRestX;
+            short dy = (short)gamepad->mouseRestY;
+            if (dx != 0 || dy != 0) {
+                gamepad->mouseRestX -= dx;
+                gamepad->mouseRestY -= dy;
+                LiSendMouseMoveEvent(dx, dy);
+            }
+        }
+        return interval;
     }
 
     float deltaX;
@@ -370,7 +392,7 @@ void SdlInputHandler::handleControllerButtonEvent(SDL_ControllerButtonEvent* eve
                     // Send the start button up event to the host, since we won't do it below
                     sendGamepadState(state);
 
-                    state->mouseEmulationTimer = SDL_AddTimer(MOUSE_EMULATION_POLLING_INTERVAL, SdlInputHandler::mouseEmulationTimerCallback, state);
+                    startMouseEmulation(state);
 
                     SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION,
                                 "Mouse emulation active");
@@ -815,6 +837,11 @@ void SdlInputHandler::handleControllerDeviceEvent(SDL_ControllerDeviceEvent* eve
             type == LI_CTYPE_PS;
 
         sendControllerArrival(state);
+
+        // The launcher's mouse emulation covers controllers connected later as well.
+        if (LauncherControl::mouseWanted() && state->mouseEmulationTimer == 0) {
+            startMouseEmulation(state);
+        }
 #else
 
         // Send an empty event to tell the PC we've arrived
