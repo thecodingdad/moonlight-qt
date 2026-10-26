@@ -2,7 +2,11 @@
 #include "session.h"
 
 #include <QCoreApplication>
+#include <QImage>
 #include <QMetaObject>
+
+#include "SDL_compat.h"
+#include <SDL_syswm.h>
 
 #include <Limelight.h>
 
@@ -14,6 +18,7 @@
 
 #ifdef Q_OS_WIN
 #include <windows.h>
+#include <dwmapi.h>
 #endif
 
 std::atomic<bool> LauncherControl::s_Stats { false };
@@ -21,6 +26,14 @@ std::atomic<bool> LauncherControl::s_Active { false };
 std::atomic<bool> LauncherControl::s_Mouse { false };
 std::atomic<float> LauncherControl::s_MouseSpeed { 1200.0f };
 std::atomic<float> LauncherControl::s_MouseExponent { 2.4f };
+std::atomic<bool> LauncherControl::s_Menu { false };
+std::atomic<void*> LauncherControl::s_HiddenWindow { nullptr };
+std::atomic<bool> LauncherControl::s_RevealScheduled { false };
+
+// Shown at the latest after this long, also when no picture arrives (the stream's own errors).
+static const Uint32 REVEAL_FALLBACK_MS = 8000;
+// After the first decoded picture: time for it to be presented.
+static const Uint32 REVEAL_DELAY_MS = 100;
 
 void LauncherControl::start()
 {
@@ -38,6 +51,19 @@ void LauncherControl::start()
     if (ok && exponent > 0) {
         s_MouseExponent = exponent;
     }
+
+#ifdef Q_OS_WIN
+    // One taskbar button with the launcher (before any window is created).
+    QString appId = qEnvironmentVariable("MOONLIGHT_LAUNCHER_APPID");
+    if (!appId.isEmpty()) {
+        typedef HRESULT (WINAPI *SetAppId)(PCWSTR);
+        auto setAppId = reinterpret_cast<SetAppId>(
+            GetProcAddress(GetModuleHandleW(L"shell32.dll"), "SetCurrentProcessExplicitAppUserModelID"));
+        if (setAppId != nullptr) {
+            setAppId(reinterpret_cast<PCWSTR>(appId.utf16()));
+        }
+    }
+#endif
 
     std::thread([] {
         std::string line;
@@ -126,6 +152,16 @@ void LauncherControl::handle(const char* line)
             }
         }, Qt::QueuedConnection);
     }
+    else if (std::strcmp(line, "menu on") == 0 || std::strcmp(line, "menu off") == 0) {
+        bool on = std::strcmp(line, "menu on") == 0;
+        s_Menu = on;
+        QMetaObject::invokeMethod(QCoreApplication::instance(), [on] {
+            Session* session = Session::get();
+            if (session != nullptr) {
+                session->setLauncherMenu(on);
+            }
+        }, Qt::QueuedConnection);
+    }
     else if (std::strncmp(line, "servercmd ", 10) == 0) {
         int index = std::atoi(line + 10);
         if (index >= 0 && index <= 255) {
@@ -147,4 +183,76 @@ void LauncherControl::publishStats(const char* text)
     }
     std::fprintf(stderr, "LAUNCHER-STATS: %s\n", escaped.c_str());
     std::fflush(stderr);
+}
+
+#ifdef Q_OS_WIN
+static void setCloaked(void* hwnd, BOOL cloaked)
+{
+    DwmSetWindowAttribute(static_cast<HWND>(hwnd), DWMWA_CLOAK, &cloaked, sizeof(cloaked));
+}
+#endif
+
+static void reveal()
+{
+    void* hwnd = LauncherControl::takeHiddenWindow();
+    if (hwnd == nullptr) {
+        return;
+    }
+#ifdef Q_OS_WIN
+    // The window may be gone by then (stream ended early): DWM just refuses the handle.
+    setCloaked(hwnd, FALSE);
+#endif
+    std::fprintf(stderr, "LAUNCHER-FIRSTFRAME\n");
+    std::fflush(stderr);
+}
+
+static Uint32 revealTimer(Uint32, void*)
+{
+    reveal();
+    return 0;
+}
+
+void LauncherControl::prepareWindow(SDL_Window* window)
+{
+    if (!active()) {
+        return;
+    }
+    QString title = qEnvironmentVariable("MOONLIGHT_LAUNCHER_TITLE");
+    if (!title.isEmpty()) {
+        SDL_SetWindowTitle(window, title.toUtf8().constData());
+    }
+    QImage icon(qEnvironmentVariable("MOONLIGHT_LAUNCHER_ICON"));
+    if (!icon.isNull()) {
+        icon = icon.convertToFormat(QImage::Format_RGBA8888);
+        SDL_Surface* surface = SDL_CreateRGBSurfaceWithFormatFrom((void*)icon.constBits(), icon.width(), icon.height(),
+                                                                  32, static_cast<int>(icon.bytesPerLine()), SDL_PIXELFORMAT_RGBA32);
+        if (surface != nullptr) {
+            SDL_SetWindowIcon(window, surface);
+            SDL_FreeSurface(surface);
+        }
+    }
+#ifdef Q_OS_WIN
+    SDL_SysWMinfo info;
+    SDL_VERSION(&info.version);
+    if (SDL_GetWindowWMInfo(window, &info) && info.subsystem == SDL_SYSWM_WINDOWS) {
+        // Invisible but drawn into: the launcher's start screen stays until the first picture.
+        setCloaked(info.info.win.window, TRUE);
+        s_RevealScheduled = false;
+        s_HiddenWindow = info.info.win.window;
+        SDL_AddTimer(REVEAL_FALLBACK_MS, revealTimer, nullptr);
+    }
+#endif
+}
+
+void* LauncherControl::takeHiddenWindow()
+{
+    return s_HiddenWindow.exchange(nullptr);
+}
+
+void LauncherControl::frameDecoded()
+{
+    // Called for every picture: only the first one of a hidden window schedules the reveal.
+    if (s_HiddenWindow.load() != nullptr && !s_RevealScheduled.exchange(true)) {
+        SDL_AddTimer(REVEAL_DELAY_MS, revealTimer, nullptr);
+    }
 }

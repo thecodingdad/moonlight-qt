@@ -3,6 +3,7 @@
 #include <QSysInfo>
 #include <QDir>
 #include "session.h"
+#include "streaming/launchercontrol.h"
 #include "settings/streamingpreferences.h"
 #include "streaming/streamutils.h"
 #ifdef Q_OS_DARWIN
@@ -2008,6 +2009,13 @@ void Session::setGamepadMouse(bool on)
     }
 }
 
+void Session::setLauncherMenu(bool open)
+{
+    if (m_InputHandler != nullptr) {
+        m_InputHandler->setLauncherMenu(open);
+    }
+}
+
 void Session::setShouldExitKeepingApp()
 {
     // Leave the stream but keep the app running on the host, whatever the preferences say.
@@ -2211,6 +2219,9 @@ void Session::exec()
         SDL_SetWindowIcon(m_Window, iconSurface);
     }
 #endif
+
+    // Launcher mode: the launcher's title and icon, hidden until the first picture.
+    LauncherControl::prepareWindow(m_Window);
 
     // Update the window display mode based on our current monitor
     // for if/when we enter full-screen mode.

@@ -2854,6 +2854,7 @@ void FFmpegVideoDecoder::decoderThreadProc()
                     const uint64_t decoderOutputUs = receiveEndUs;
                     SDL_assert(m_FrameInfoQueue.size() == m_FramesIn - m_FramesOut);
                     m_FramesOut++;
+                    LauncherControl::frameDecoded();
 
                     // Only active VRR needs the rest of the decoder-facing
                     // pacing metadata.

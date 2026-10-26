@@ -180,6 +180,32 @@ void SdlInputHandler::setGamepadMouse(bool on)
     }
 }
 
+void SdlInputHandler::setLauncherMenu(bool open)
+{
+    if (open) {
+        // Everything held is let go on the host; further pad input belongs to the menu.
+        for (int i = 0; i < MAX_GAMEPADS; i++) {
+            GamepadState* state = &m_GamepadState[i];
+            if (state->controller == nullptr) {
+                continue;
+            }
+            state->buttons = 0;
+            state->lt = state->rt = 0;
+            state->lsX = state->lsY = state->rsX = state->rsY = 0;
+            sendGamepadState(state);
+        }
+        // The mouse can reach the menu.
+        m_MenuReleasedCapture = isCaptureActive();
+        if (m_MenuReleasedCapture) {
+            setCaptureActive(false);
+        }
+    }
+    else if (m_MenuReleasedCapture) {
+        m_MenuReleasedCapture = false;
+        setCaptureActive(true);
+    }
+}
+
 void SdlInputHandler::startMouseEmulation(GamepadState* state)
 {
     state->mouseRestX = 0;
@@ -246,6 +272,11 @@ Uint32 SdlInputHandler::mouseEmulationTimerCallback(Uint32 interval, void *param
 
 void SdlInputHandler::handleControllerAxisEvent(SDL_ControllerAxisEvent* event)
 {
+    // The launcher's menu over the stream takes the pads.
+    if (LauncherControl::menuOpen()) {
+        return;
+    }
+
     SDL_JoystickID gameControllerId = event->which;
     GamepadState* state = findStateForGamepad(gameControllerId);
     if (state == NULL) {
@@ -310,6 +341,10 @@ void SdlInputHandler::handleControllerAxisEvent(SDL_ControllerAxisEvent* event)
 
 void SdlInputHandler::handleControllerButtonEvent(SDL_ControllerButtonEvent* event)
 {
+    if (LauncherControl::menuOpen()) {
+        return;
+    }
+
     if (event->button >= SDL_arraysize(k_ButtonMap)) {
         SDL_LogWarn(SDL_LOG_CATEGORY_APPLICATION,
                     "No mapping for gamepad button: %u",

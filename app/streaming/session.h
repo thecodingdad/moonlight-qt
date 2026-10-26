@@ -148,6 +148,9 @@ public:
     // Exit after the stream without quitting the host app (launcher control "disconnect").
     void setShouldExitKeepingApp();
 
+    // The launcher's menu over the stream (launcher control "menu on|off").
+    void setLauncherMenu(bool open);
+
     // Gamepad mouse emulation of all gamepads on / off (launcher control "mouse on|off").
     void setGamepadMouse(bool on);
 

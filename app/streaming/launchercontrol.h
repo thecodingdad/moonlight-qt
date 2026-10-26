@@ -2,6 +2,8 @@
 
 #include <atomic>
 
+struct SDL_Window;
+
 // Control channel for an app that embeds Moonlight-Qt as its streaming client (launcher mode,
 // MOONLIGHT_LAUNCHER_MODE set): commands arrive as lines on stdin, answers leave as "LAUNCHER-"
 // lines on stderr like the other launcher markers.
@@ -16,6 +18,12 @@
 // MOONLIGHT_LAUNCHER_MOUSE=1 starts with the mouse emulation on, MOONLIGHT_LAUNCHER_MOUSE_SPEED
 // and MOONLIGHT_LAUNCHER_MOUSE_EXPONENT set speed and curve from the start.
 //   overlay        performance overlay on / off
+//   menu on|off    the launcher's menu is shown over the stream: gamepads reach the host as
+//                  released (their input drives the menu) and the mouse is set free
+//
+// The launcher's identity: MOONLIGHT_LAUNCHER_APPID puts the stream under the launcher's taskbar
+// button, MOONLIGHT_LAUNCHER_TITLE and MOONLIGHT_LAUNCHER_ICON (a PNG) name the stream window.
+// The window stays invisible until its first picture (no black frame), then "LAUNCHER-FIRSTFRAME".
 //
 // In launcher mode the launcher owns the gamepad combos: the built-in ones (Start held for the
 // mouse, Start+Select+L1+R1 to quit, Select+L1+R1+X/Y for the overlays) are off.
@@ -35,6 +43,17 @@ public:
 
     static void publishStats(const char* text);
 
+    static bool menuOpen() { return s_Menu.load(); }
+
+    // The new stream window: the launcher's title and icon, hidden until frameDecoded().
+    static void prepareWindow(SDL_Window* window);
+
+    // A picture was decoded (decoder thread): shows the window shortly after the first one.
+    static void frameDecoded();
+
+    // The window still hidden, taken by whoever shows it (once).
+    static void* takeHiddenWindow();
+
 private:
     static void handle(const char* line);
 
@@ -43,4 +62,7 @@ private:
     static std::atomic<bool> s_Mouse;
     static std::atomic<float> s_MouseSpeed;
     static std::atomic<float> s_MouseExponent;
+    static std::atomic<bool> s_Menu;
+    static std::atomic<void*> s_HiddenWindow;
+    static std::atomic<bool> s_RevealScheduled;
 };

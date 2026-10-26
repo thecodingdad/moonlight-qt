@@ -77,6 +77,9 @@ public:
     // Mouse emulation of all gamepads on / off (launcher control).
     void setGamepadMouse(bool on);
 
+    // The launcher's menu is open over the stream: pads released on the host, mouse set free.
+    void setLauncherMenu(bool open);
+
     void handleControllerButtonEvent(SDL_ControllerButtonEvent* event);
 
     void initializeControllers();
@@ -165,6 +168,8 @@ private:
     void sendGamepadState(GamepadState* state);
 
     void startMouseEmulation(GamepadState* state);
+
+    bool m_MenuReleasedCapture = false;
 
     void sendGamepadBatteryState(GamepadState* state, SDL_JoystickPowerLevel level);
 
