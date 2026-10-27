@@ -22,6 +22,7 @@ struct GamepadState {
     SDL_TimerID mouseEmulationTimer;
     uint32_t lastStartDownTime;
     float mouseRestX, mouseRestY;
+    uint64_t mouseLastUs;
 
     bool clickpadButtonEmulationEnabled;
     bool emulatedClickpadButtonDown;

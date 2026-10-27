@@ -15,7 +15,7 @@
 
 // How long between polling the gamepad to send virtual mouse input
 #define MOUSE_EMULATION_POLLING_INTERVAL 50
-#define LAUNCHER_MOUSE_INTERVAL 10
+#define LAUNCHER_MOUSE_INTERVAL 4
 
 // Determines how fast the mouse will move each interval
 #define MOUSE_EMULATION_MOTION_MULTIPLIER 4
@@ -210,6 +210,7 @@ void SdlInputHandler::startMouseEmulation(GamepadState* state)
 {
     state->mouseRestX = 0;
     state->mouseRestY = 0;
+    state->mouseLastUs = LiGetMicroseconds();
     // In launcher mode a smooth rate (the launcher's speed curve), otherwise Moonlight's own.
     state->mouseEmulationTimer = SDL_AddTimer(LauncherControl::active() ? LAUNCHER_MOUSE_INTERVAL : MOUSE_EMULATION_POLLING_INTERVAL,
                                               SdlInputHandler::mouseEmulationTimerCallback, state);
@@ -237,8 +238,12 @@ Uint32 SdlInputHandler::mouseEmulationTimerCallback(Uint32 interval, void *param
         float nx = rawX / 32766.0f;
         float ny = rawY / 32766.0f;
         float magnitude = qMin(1.0f, qSqrt(nx * nx + ny * ny));
+        // By the time that really passed (a late timer must not slow the pointer down).
+        uint64_t now = LiGetMicroseconds();
+        float elapsed = qMin(0.05f, (now - gamepad->mouseLastUs) / 1000000.0f);
+        gamepad->mouseLastUs = now;
         if (magnitude >= 0.1f) {
-            float step = LauncherControl::mouseSpeed() * qPow(magnitude, LauncherControl::mouseExponent()) * interval / 1000.0f / magnitude;
+            float step = LauncherControl::mouseSpeed() * qPow(magnitude, LauncherControl::mouseExponent()) * elapsed / magnitude;
             gamepad->mouseRestX += nx * step;
             gamepad->mouseRestY += ny * step;
             short dx = (short)gamepad->mouseRestX;
