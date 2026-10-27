@@ -15,7 +15,7 @@
 
 // How long between polling the gamepad to send virtual mouse input
 #define MOUSE_EMULATION_POLLING_INTERVAL 50
-#define LAUNCHER_MOUSE_INTERVAL 4
+#define LAUNCHER_MOUSE_INTERVAL 2
 
 // Determines how fast the mouse will move each interval
 #define MOUSE_EMULATION_MOTION_MULTIPLIER 4
