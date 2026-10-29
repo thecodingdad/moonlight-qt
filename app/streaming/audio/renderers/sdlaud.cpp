@@ -2,6 +2,8 @@
 
 #include <Limelight.h>
 
+#include "streaming/launchercontrol.h"
+
 SdlAudioRenderer::SdlAudioRenderer()
     : m_AudioDevice(0),
       m_AudioBuffer(nullptr)
@@ -103,6 +105,7 @@ bool SdlAudioRenderer::submitAudio(int bytesWritten)
     // Don't queue if there's already more than 30 ms of audio data waiting
     // in Moonlight's audio queue.
     if (LiGetPendingAudioDuration() > 30) {
+        LauncherControl::audioDropped();
         return true;
     }
 

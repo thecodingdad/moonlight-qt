@@ -15,6 +15,7 @@
 #include <cstring>
 #include <string>
 #include <thread>
+#include <chrono>
 
 #ifdef Q_OS_WIN
 #include <windows.h>
@@ -29,6 +30,9 @@ std::atomic<float> LauncherControl::s_MouseExponent { 2.4f };
 std::atomic<bool> LauncherControl::s_Menu { false };
 std::atomic<void*> LauncherControl::s_HiddenWindow { nullptr };
 std::atomic<bool> LauncherControl::s_RevealScheduled { false };
+std::atomic<bool> LauncherControl::s_FramesLost { false };
+std::atomic<bool> LauncherControl::s_OverlayShown { false };
+std::atomic<int> LauncherControl::s_AudioDrops { 0 };
 
 // Shown at the latest after this long, also when no picture arrives (the stream's own errors).
 static const Uint32 REVEAL_FALLBACK_MS = 8000;
@@ -64,6 +68,22 @@ void LauncherControl::start()
         }
     }
 #endif
+
+    // The connection once a second while a stream is connected (no round trip time otherwise).
+    std::thread([] {
+        for (;;) {
+            std::this_thread::sleep_for(std::chrono::seconds(1));
+            uint32_t rtt = 0;
+            uint32_t variance = 0;
+            if (!LiGetEstimatedRttInfo(&rtt, &variance)) {
+                s_AudioDrops = 0;
+                continue;
+            }
+            std::fprintf(stderr, "LAUNCHER-QUALITY: %u %u %d %d %d\n", rtt, variance, s_FramesLost.load() ? 1 : 0,
+                         s_AudioDrops.exchange(0), s_OverlayShown.load() ? 1 : 0);
+            std::fflush(stderr);
+        }
+    }).detach();
 
     std::thread([] {
         std::string line;

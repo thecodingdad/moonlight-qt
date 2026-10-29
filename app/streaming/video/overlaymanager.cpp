@@ -1,5 +1,6 @@
 #include "overlaymanager.h"
 #include "path.h"
+#include "streaming/launchercontrol.h"
 #include <exception>
 #include <cmath>
 #include <cstdio>
@@ -526,6 +527,7 @@ void OverlayManager::setOverlayState(OverlayType type, bool enabled)
         if (type == OverlayDebug) {
             if (m_StatsEnabled == enabled) return;
             m_StatsEnabled = enabled;
+            LauncherControl::setOverlayShown(enabled);
             overlay.enabled = m_StatsEnabled || m_TimingGraphEnabled;
         }
         else {

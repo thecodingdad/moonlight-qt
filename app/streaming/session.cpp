@@ -192,7 +192,9 @@ void Session::clConnectionStatusUpdate(int connectionStatus)
                 "Connection status update: %d",
                 connectionStatus);
 
-    if (!s_ActiveSession->m_Preferences->connectionWarnings) {
+    LauncherControl::setFramesLost(connectionStatus == CONN_STATUS_POOR);
+    // The launcher shows its own connection warning.
+    if (!s_ActiveSession->m_Preferences->connectionWarnings || LauncherControl::active()) {
         return;
     }
 

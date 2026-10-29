@@ -25,6 +25,10 @@ struct SDL_Window;
 // button, MOONLIGHT_LAUNCHER_TITLE and MOONLIGHT_LAUNCHER_ICON (a PNG) name the stream window.
 // The window stays invisible until its first picture (no black frame), then "LAUNCHER-FIRSTFRAME".
 //
+// Once a second while connected: "LAUNCHER-QUALITY: <rtt ms> <rtt variance ms> <frames lost 0|1>
+// <audio packets dropped since the last line> <performance overlay 0|1>" for the launcher's own
+// connection warning (Moonlight's "poor connection" text stays off in launcher mode).
+//
 // In launcher mode the launcher owns the gamepad combos: the built-in ones (Start held for the
 // mouse, Start+Select+L1+R1 to quit, Select+L1+R1+X/Y for the overlays) are off.
 class LauncherControl
@@ -44,6 +48,11 @@ public:
     static void publishStats(const char* text);
 
     static bool menuOpen() { return s_Menu.load(); }
+
+    // Connection details for "LAUNCHER-QUALITY" (any thread).
+    static void setFramesLost(bool lost) { s_FramesLost = lost; }
+    static void setOverlayShown(bool shown) { s_OverlayShown = shown; }
+    static void audioDropped() { s_AudioDrops++; }
 
     // The new stream window: the launcher's title and icon, hidden until frameDecoded().
     static void prepareWindow(SDL_Window* window);
@@ -65,4 +74,7 @@ private:
     static std::atomic<bool> s_Menu;
     static std::atomic<void*> s_HiddenWindow;
     static std::atomic<bool> s_RevealScheduled;
+    static std::atomic<bool> s_FramesLost;
+    static std::atomic<bool> s_OverlayShown;
+    static std::atomic<int> s_AudioDrops;
 };
