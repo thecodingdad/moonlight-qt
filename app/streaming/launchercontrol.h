@@ -29,6 +29,9 @@ struct SDL_Window;
 // <audio packets dropped since the last line> <performance overlay 0|1>" for the launcher's own
 // connection warning (Moonlight's "poor connection" text stays off in launcher mode).
 //
+// MOONLIGHT_LAUNCHER_FIRST_PAD="<n>:<name>" names the pad that started the stream (the n-th connected
+// game controller of that name, from 0): it becomes player 1, the others leave that slot free for it.
+//
 // In launcher mode the launcher owns the gamepad combos: the built-in ones (Start held for the
 // mouse, Start+Select+L1+R1 to quit, Select+L1+R1+X/Y for the overlays) are off.
 class LauncherControl
@@ -48,6 +51,9 @@ public:
     static void publishStats(const char* text);
 
     static bool menuOpen() { return s_Menu.load(); }
+
+    // Whether the device at SDL device index deviceIndex is the pad that started the stream.
+    static bool isFirstPad(int deviceIndex);
 
     // Connection details for "LAUNCHER-QUALITY" (any thread).
     static void setFramesLost(bool lost) { s_FramesLost = lost; }

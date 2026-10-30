@@ -39,6 +39,32 @@ static const Uint32 REVEAL_FALLBACK_MS = 8000;
 // After the first decoded picture: time for it to be presented.
 static const Uint32 REVEAL_DELAY_MS = 100;
 
+bool LauncherControl::isFirstPad(int deviceIndex)
+{
+    static const QString wanted = qEnvironmentVariable("MOONLIGHT_LAUNCHER_FIRST_PAD");
+    int separator = wanted.indexOf(':');
+    if (!s_Active || separator <= 0 || !SDL_IsGameController(deviceIndex)) {
+        return false;
+    }
+    bool ok = false;
+    int ordinal = wanted.left(separator).toInt(&ok);
+    QString name = wanted.mid(separator + 1);
+    auto named = [&name](int index) {
+        const char* n = SDL_GameControllerNameForIndex(index);
+        return n != nullptr && name == QString::fromUtf8(n);
+    };
+    if (!ok || !named(deviceIndex)) {
+        return false;
+    }
+    int before = 0;
+    for (int i = 0; i < deviceIndex; i++) {
+        if (SDL_IsGameController(i) && named(i)) {
+            before++;
+        }
+    }
+    return before == ordinal;
+}
+
 void LauncherControl::start()
 {
     if (!qEnvironmentVariableIsSet("MOONLIGHT_LAUNCHER_MODE")) {

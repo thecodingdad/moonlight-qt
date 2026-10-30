@@ -746,6 +746,27 @@ void SdlInputHandler::handleControllerDeviceEvent(SDL_ControllerDeviceEvent* eve
         // the gamepad in single player games, so just assign them in order from 0.
         i = 0;
 
+        // Launcher mode: the pad that started the stream takes player 1. While it is connected but
+        // not added yet, the others start at player 2.
+        if (m_MultiController && !LauncherControl::isFirstPad(event->which)) {
+            for (int d = 0; d < SDL_NumJoysticks(); d++) {
+                if (d == event->which || !LauncherControl::isFirstPad(d)) {
+                    continue;
+                }
+                SDL_JoystickID id = SDL_JoystickGetDeviceInstanceID(d);
+                bool added = false;
+                for (int s = 0; s < MAX_GAMEPADS; s++) {
+                    if (m_GamepadState[s].controller != NULL && m_GamepadState[s].jsId == id) {
+                        added = true;
+                    }
+                }
+                if (!added) {
+                    i = 1;
+                }
+                break;
+            }
+        }
+
         for (; i < MAX_GAMEPADS; i++) {
             SDL_assert(m_GamepadState[i].controller != controller);
             if (m_GamepadState[i].controller == NULL) {
