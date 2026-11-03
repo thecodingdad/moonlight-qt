@@ -3,6 +3,8 @@
 
 #include <QCoreApplication>
 #include <QImage>
+#include <QJsonDocument>
+#include <QJsonObject>
 #include <QMetaObject>
 #include <QStringList>
 
@@ -66,6 +68,42 @@ bool LauncherControl::isFirstPad(int deviceIndex)
     return before == ordinal;
 }
 
+QMutex LauncherControl::s_PadsLock;
+QHash<QString, LauncherPad> LauncherControl::s_Pads;
+std::atomic<int> LauncherControl::s_PadsGeneration { 0 };
+
+void LauncherControl::setPads(const QByteArray& json)
+{
+    QJsonObject all = QJsonDocument::fromJson(json).object();
+    QHash<QString, LauncherPad> pads;
+    for (auto it = all.begin(); it != all.end(); ++it) {
+        QJsonObject o = it.value().toObject();
+        LauncherPad pad;
+        pad.deadzonePercent = qBound(0, o.value("deadzone").toInt(0), 90);
+        pad.rumblePercent = qBound(0, o.value("rumble").toInt(100), 100);
+        pad.motion = o.value("motion").toBool(true);
+        pad.battery = o.value("battery").toBool(true);
+        pad.swapFaceButtons = o.contains("swap") ? (o.value("swap").toBool() ? 1 : 0) : -1;
+        pad.touchpadMouse = o.value("touchpadMouse").toBool(false);
+        pad.attachOnUse = o.value("attachOnUse").toBool(false);
+        pads.insert(it.key(), pad);
+    }
+    {
+        QMutexLocker lock(&s_PadsLock);
+        s_Pads = pads;
+    }
+    s_PadsGeneration++;
+}
+
+LauncherPad LauncherControl::pad(const char* name)
+{
+    if (!s_Active || name == nullptr) {
+        return LauncherPad();
+    }
+    QMutexLocker lock(&s_PadsLock);
+    return s_Pads.value(QString::fromUtf8(name), LauncherPad());
+}
+
 std::atomic<int> LauncherControl::s_HotkeyKey { 0 };
 std::atomic<int> LauncherControl::s_HotkeyMods { 0 };
 std::atomic<bool> LauncherControl::s_HotkeyDown { false };
@@ -119,6 +157,7 @@ void LauncherControl::start()
     }
     s_Active = true;
     setHotkey(qgetenv("MOONLIGHT_LAUNCHER_HOTKEY").constData());
+    setPads(qgetenv("MOONLIGHT_LAUNCHER_PADS"));
     s_Mouse = qgetenv("MOONLIGHT_LAUNCHER_MOUSE") == "1";
     bool ok = false;
     float speed = qEnvironmentVariable("MOONLIGHT_LAUNCHER_MOUSE_SPEED").toFloat(&ok);
@@ -197,6 +236,17 @@ void LauncherControl::start()
 
 void LauncherControl::handle(const char* line)
 {
+    if (std::strncmp(line, "pads ", 5) == 0) {
+        setPads(QByteArray(line + 5));
+        // Motion sensors follow at once (the rest is read with every event).
+        QMetaObject::invokeMethod(QCoreApplication::instance(), [] {
+            Session* session = Session::get();
+            if (session != nullptr) {
+                session->launcherPadsChanged();
+            }
+        }, Qt::QueuedConnection);
+        return;
+    }
     if (std::strncmp(line, "hotkey", 6) == 0 && (line[6] == '\0' || line[6] == ' ')) {
         setHotkey(line[6] == ' ' ? line + 7 : "");
         return;

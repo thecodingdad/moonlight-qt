@@ -1,6 +1,9 @@
 #pragma once
 
 #include <atomic>
+#include <QHash>
+#include <QMutex>
+#include <QString>
 
 struct SDL_Window;
 
@@ -37,11 +40,37 @@ struct SDL_Window;
 // never reach Windows, so the launcher's hotkey can't fire): it is caught here instead, kept from
 // the host and reported as "LAUNCHER-HOTKEY". "hotkey <spec>" on stdin changes it ("hotkey" alone: none).
 //
+// MOONLIGHT_LAUNCHER_PADS='{"<SDL controller name>":{"deadzone":10,"rumble":80,"motion":false,
+// "battery":true,"swap":false,"touchpadMouse":false,"attachOnUse":false}, …}' sets each controller's own
+// settings (missing keys and controllers: Moonlight's defaults). "pads <same JSON>" on stdin replaces
+// them during the stream. deadzone: radial stick dead zone in percent; rumble: strength in percent;
+// motion: gyro / accelerometer for the host; battery: report the battery level; swap: A/B and X/Y
+// swapped (absent: the global setting); touchpadMouse: the touchpad moves the host's mouse (its
+// click is the left button) instead of reaching the host as a touchpad; attachOnUse: the host learns
+// about the controller with its first input only, not when the stream starts.
+//
 // In launcher mode the launcher owns the gamepad combos: the built-in ones (Start held for the
 // mouse, Start+Select+L1+R1 to quit, Select+L1+R1+X/Y for the overlays) are off.
+// One controller's settings from the launcher (see MOONLIGHT_LAUNCHER_PADS).
+struct LauncherPad {
+    int deadzonePercent = 0;
+    int rumblePercent = 100;
+    bool motion = true;
+    bool battery = true;
+    int swapFaceButtons = -1; // -1: the global setting
+    bool touchpadMouse = false;
+    bool attachOnUse = false;
+};
+
 class LauncherControl
 {
 public:
+    // The settings of the controller with this SDL name (defaults outside launcher mode).
+    static LauncherPad pad(const char* name);
+
+    // Changes with every new set of controller settings (to refresh cached copies).
+    static int padsGeneration() { return s_PadsGeneration.load(); }
+
     // Starts reading stdin; does nothing outside launcher mode.
     static void start();
 
@@ -93,6 +122,10 @@ private:
     static std::atomic<bool> s_OverlayShown;
     static std::atomic<int> s_AudioDrops;
     static void setHotkey(const char* spec);
+    static void setPads(const QByteArray& json);
+    static QMutex s_PadsLock;
+    static QHash<QString, LauncherPad> s_Pads;
+    static std::atomic<int> s_PadsGeneration;
     static std::atomic<int> s_HotkeyKey;
     static std::atomic<int> s_HotkeyMods;
     static std::atomic<bool> s_HotkeyDown;

@@ -2011,6 +2011,13 @@ void Session::setGamepadMouse(bool on)
     }
 }
 
+void Session::launcherPadsChanged()
+{
+    if (m_InputHandler != nullptr) {
+        m_InputHandler->launcherPadsChanged();
+    }
+}
+
 void Session::setLauncherMenu(bool open)
 {
     if (m_InputHandler != nullptr) {

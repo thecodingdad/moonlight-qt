@@ -23,6 +23,9 @@
 // Determines the maximum motion amount before allowing movement
 #define MOUSE_EMULATION_DEADZONE 2
 
+// Touchpad as mouse (launcher mode): pointer pixels for a swipe across the whole pad.
+#define TOUCHPAD_MOUSE_PIXELS 1600.0f
+
 // Haptic capabilities (in addition to those from SDL_HapticQuery())
 #define ML_HAPTIC_GC_RUMBLE         (1U << 16)
 #define ML_HAPTIC_SIMPLE_RUMBLE     (1U << 17)
@@ -59,6 +62,9 @@ SdlInputHandler::findStateForGamepad(SDL_JoystickID id)
 void SdlInputHandler::sendGamepadState(GamepadState* state)
 {
     SDL_assert(m_GamepadMask == 0x1 || m_MultiController);
+    if (state->attachPending) {
+        return;
+    }
 
     // Handle Select+PS as the clickpad button on PS4/5 controllers without a clickpad mapping
     int buttons = state->buttons;
@@ -79,6 +85,26 @@ void SdlInputHandler::sendGamepadState(GamepadState* state)
     short lsY = state->lsY;
     short rsX = state->rsX;
     short rsY = state->rsY;
+
+    // Launcher mode: the controller's own radial dead zone, the rest rescaled to the full range.
+    int deadzone = launcherPad(state).deadzonePercent;
+    if (deadzone > 0) {
+        auto applyDeadzone = [deadzone](short& x, short& y) {
+            float fx = x / 32767.0f;
+            float fy = y / 32767.0f;
+            float magnitude = qSqrt(fx * fx + fy * fy);
+            float zone = deadzone / 100.0f;
+            if (magnitude <= zone) {
+                x = y = 0;
+                return;
+            }
+            float scale = qMin(1.0f, (magnitude - zone) / (1.0f - zone)) / magnitude;
+            x = (short)qBound(-32767.0f, fx * scale * 32767.0f, 32767.0f);
+            y = (short)qBound(-32767.0f, fy * scale * 32767.0f, 32767.0f);
+        };
+        applyDeadzone(lsX, lsY);
+        applyDeadzone(rsX, rsY);
+    }
 
     // When in single controller mode, merge all gamepad state together
     if (!m_MultiController) {
@@ -114,6 +140,9 @@ void SdlInputHandler::sendGamepadState(GamepadState* state)
 
 void SdlInputHandler::sendGamepadBatteryState(GamepadState* state, SDL_JoystickPowerLevel level)
 {
+    if (state->attachPending || !launcherPad(state).battery) {
+        return;
+    }
     uint8_t batteryPercentage;
     uint8_t batteryState;
 
@@ -204,6 +233,101 @@ void SdlInputHandler::setLauncherMenu(bool open)
         m_MenuReleasedCapture = false;
         setCaptureActive(true);
     }
+}
+
+const LauncherPad& SdlInputHandler::launcherPad(GamepadState* state)
+{
+    int generation = LauncherControl::padsGeneration() + 1;
+    if (state->launcherPadGeneration != generation) {
+        state->launcherPad = LauncherControl::pad(SDL_GameControllerName(state->controller));
+        state->launcherPadGeneration = generation;
+    }
+    return state->launcherPad;
+}
+
+void SdlInputHandler::attachOnInput(GamepadState* state)
+{
+    if (!state->attachPending) {
+        return;
+    }
+    state->attachPending = false;
+    if (m_MultiController) {
+        m_GamepadMask |= (1 << state->index);
+    }
+    SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION, "Gamepad %d attached with its first input (launcher)", state->index);
+#if SDL_VERSION_ATLEAST(2, 0, 14)
+    state->clickpadButtonEmulationEnabled =
+        SDL_GameControllerGetBindForButton(state->controller, SDL_CONTROLLER_BUTTON_TOUCHPAD).bindType == SDL_CONTROLLER_BINDTYPE_NONE &&
+        moonlightControllerType(state->controller) == LI_CTYPE_PS;
+    sendControllerArrival(state);
+#endif
+    if (LauncherControl::mouseWanted() && state->mouseEmulationTimer == 0) {
+        startMouseEmulation(state);
+    }
+    SDL_JoystickPowerLevel powerLevel = SDL_JoystickCurrentPowerLevel(SDL_GameControllerGetJoystick(state->controller));
+    if (powerLevel != SDL_JOYSTICK_POWER_UNKNOWN) {
+        sendGamepadBatteryState(state, powerLevel);
+    }
+}
+
+void SdlInputHandler::launcherPadsChanged()
+{
+#if SDL_VERSION_ATLEAST(2, 0, 14)
+    // Sensors run only while the host asked for them and the controller's motion is on.
+    for (int i = 0; i < MAX_GAMEPADS; i++) {
+        GamepadState* state = &m_GamepadState[i];
+        if (state->controller == nullptr) {
+            continue;
+        }
+        bool motion = launcherPad(state).motion;
+        if (state->accelReportPeriodMs) {
+            SDL_GameControllerSetSensorEnabled(state->controller, SDL_SENSOR_ACCEL, motion ? SDL_TRUE : SDL_FALSE);
+        }
+        if (state->gyroReportPeriodMs) {
+            SDL_GameControllerSetSensorEnabled(state->controller, SDL_SENSOR_GYRO, motion ? SDL_TRUE : SDL_FALSE);
+        }
+    }
+#endif
+}
+
+void SdlInputHandler::touchpadMouseEvent(GamepadState* state, SDL_ControllerTouchpadEvent* event)
+{
+#if SDL_VERSION_ATLEAST(2, 0, 14)
+    // Only the first finger steers; positions are 0..1 across the pad.
+    if (event->finger != 0) {
+        return;
+    }
+    switch (event->type) {
+    case SDL_CONTROLLERTOUCHPADDOWN:
+        state->touchMouseDown = true;
+        state->touchMouseX = event->x;
+        state->touchMouseY = event->y;
+        state->touchMouseRestX = state->touchMouseRestY = 0;
+        break;
+    case SDL_CONTROLLERTOUCHPADUP:
+        state->touchMouseDown = false;
+        break;
+    case SDL_CONTROLLERTOUCHPADMOTION:
+        if (state->touchMouseDown) {
+            // A swipe across the whole pad moves the pointer about a screen width.
+            state->touchMouseRestX += (event->x - state->touchMouseX) * TOUCHPAD_MOUSE_PIXELS;
+            state->touchMouseRestY += (event->y - state->touchMouseY) * TOUCHPAD_MOUSE_PIXELS * 0.5f;
+            state->touchMouseX = event->x;
+            state->touchMouseY = event->y;
+            short dx = (short)state->touchMouseRestX;
+            short dy = (short)state->touchMouseRestY;
+            if (dx != 0 || dy != 0) {
+                state->touchMouseRestX -= dx;
+                state->touchMouseRestY -= dy;
+                LiSendMouseMoveEvent(dx, dy);
+            }
+        }
+        break;
+    }
+#else
+    Q_UNUSED(state);
+    Q_UNUSED(event);
+#endif
 }
 
 void SdlInputHandler::startMouseEmulation(GamepadState* state)
@@ -338,6 +462,15 @@ void SdlInputHandler::handleControllerAxisEvent(SDL_ControllerAxisEvent* event)
         SDL_PeepEvents(&nextEvent, 1, SDL_GETEVENT, SDL_CONTROLLERAXISMOTION, SDL_CONTROLLERAXISMOTION);
     }
 
+    // Waiting for its first input: a clear stick or trigger move announces it, noise doesn't.
+    if (state->attachPending) {
+        if (qAbs(state->lsX) < 12000 && qAbs(state->lsY) < 12000 && qAbs(state->rsX) < 12000 &&
+                qAbs(state->rsY) < 12000 && state->lt < 100 && state->rt < 100) {
+            return;
+        }
+        attachOnInput(state);
+    }
+
     // Only send the gamepad state to the host if it's not in mouse emulation mode
     if (state->mouseEmulationTimer == 0) {
         sendGamepadState(state);
@@ -362,7 +495,21 @@ void SdlInputHandler::handleControllerButtonEvent(SDL_ControllerButtonEvent* eve
         return;
     }
 
-    if (m_SwapFaceButtons) {
+    if (state->attachPending) {
+        if (event->state != SDL_PRESSED) {
+            return;
+        }
+        attachOnInput(state);
+    }
+
+    // Touchpad as mouse: its click is the left mouse button, not a gamepad button.
+    if (event->button == SDL_CONTROLLER_BUTTON_TOUCHPAD && launcherPad(state).touchpadMouse) {
+        LiSendMouseButtonEvent(event->state == SDL_PRESSED ? BUTTON_ACTION_PRESS : BUTTON_ACTION_RELEASE, BUTTON_LEFT);
+        return;
+    }
+
+    int swapSetting = launcherPad(state).swapFaceButtons;
+    if (swapSetting >= 0 ? swapSetting == 1 : m_SwapFaceButtons) {
         switch (event->button) {
         case SDL_CONTROLLER_BUTTON_A:
             event->button = SDL_CONTROLLER_BUTTON_B;
@@ -516,7 +663,7 @@ void SdlInputHandler::handleControllerButtonEvent(SDL_ControllerButtonEvent* eve
 void SdlInputHandler::handleControllerSensorEvent(SDL_ControllerSensorEvent* event)
 {
     GamepadState* state = findStateForGamepad(event->which);
-    if (state == NULL) {
+    if (state == NULL || state->attachPending || !launcherPad(state).motion) {
         return;
     }
 
@@ -551,7 +698,12 @@ void SdlInputHandler::handleControllerSensorEvent(SDL_ControllerSensorEvent* eve
 void SdlInputHandler::handleControllerTouchpadEvent(SDL_ControllerTouchpadEvent* event)
 {
     GamepadState* state = findStateForGamepad(event->which);
-    if (state == NULL) {
+    if (state == NULL || state->attachPending || LauncherControl::menuOpen()) {
+        return;
+    }
+
+    if (launcherPad(state).touchpadMouse) {
+        touchpadMouseEvent(state, event);
         return;
     }
 
@@ -654,10 +806,12 @@ void SdlInputHandler::sendControllerArrival(GamepadState* state)
             capabilities |= LI_CCAP_DUAL_TOUCHPAD;
         }
     }
-    if (SDL_GameControllerHasSensor(state->controller, SDL_SENSOR_ACCEL)) {
+    // Launcher mode: no motion offered for a controller whose motion is off.
+    const bool motion = launcherPad(state).motion;
+    if (motion && SDL_GameControllerHasSensor(state->controller, SDL_SENSOR_ACCEL)) {
         capabilities |= LI_CCAP_ACCEL;
     }
-    if (SDL_GameControllerHasSensor(state->controller, SDL_SENSOR_GYRO)) {
+    if (motion && SDL_GameControllerHasSensor(state->controller, SDL_SENSOR_GYRO)) {
         capabilities |= LI_CCAP_GYRO;
     }
     if (SDL_JoystickCurrentPowerLevel(SDL_GameControllerGetJoystick(state->controller)) != SDL_JOYSTICK_POWER_UNKNOWN || SDL_VERSION_ATLEAST(2, 24, 0)) {
@@ -811,6 +965,9 @@ void SdlInputHandler::handleControllerDeviceEvent(SDL_ControllerDeviceEvent* eve
 
         state->controller = controller;
         state->jsId = SDL_JoystickInstanceID(SDL_GameControllerGetJoystick(state->controller));
+        // Launcher mode: a controller set to attach on use waits for its first input (the pad
+        // that started the stream is in use already).
+        state->attachPending = m_MultiController && launcherPad(state).attachOnUse && !LauncherControl::isFirstPad(event->which);
 
         hapticCaps = 0;
 #if SDL_VERSION_ATLEAST(2, 0, 18)
@@ -876,6 +1033,12 @@ void SdlInputHandler::handleControllerDeviceEvent(SDL_ControllerDeviceEvent* eve
         state->hapticsAttached = DualSenseHaptics::attach(state->index, state->controller);
 
         // Add this gamepad to the gamepad mask
+        if (state->attachPending) {
+            // Announced with its first input (attachOnInput).
+            m_GamepadMask &= ~(1 << state->index);
+            SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION, "Gamepad %d waits for its first input (launcher)", state->index);
+            return;
+        }
         if (m_MultiController) {
             // NB: Don't assert that it's unset here because we will already
             // have the mask set for initially attached gamepads to avoid confusing
@@ -930,6 +1093,13 @@ void SdlInputHandler::handleControllerDeviceEvent(SDL_ControllerDeviceEvent* eve
                 SDL_HapticClose(state->haptic);
             }
 #endif
+
+            // Never announced (waiting for its first input): the host doesn't know it.
+            if (state->attachPending) {
+                SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION, "Gamepad %d is gone (never attached)", state->index);
+                SDL_memset(state, 0, sizeof(*state));
+                return;
+            }
 
             // Remove this from the gamepad mask in MC-mode
             if (m_MultiController) {
@@ -1018,7 +1188,10 @@ void SdlInputHandler::rumble(unsigned short controllerNumber, unsigned short low
 
         routed = true;
         if (DualSenseHaptics::playing(controllerNumber)) continue;
-        const int rc = SDL_GameControllerRumble(state->controller, lowFreqMotor, highFreqMotor, 30000);
+        // Launcher mode: the controller's own strength.
+        const int strength = LauncherControl::pad(SDL_GameControllerName(state->controller)).rumblePercent;
+        const int rc = SDL_GameControllerRumble(state->controller, (Uint16)(lowFreqMotor * strength / 100),
+                                                (Uint16)(highFreqMotor * strength / 100), 30000);
 
         static uint32_t lastRumbleLogMs;
         const uint32_t now = SDL_GetTicks();
@@ -1101,7 +1274,9 @@ void SdlInputHandler::rumbleTriggers(uint16_t controllerNumber, uint16_t leftTri
         if (state->controller == nullptr || state->index != (short)controllerNumber) {
             continue;
         }
-        const int rc = SDL_GameControllerRumbleTriggers(state->controller, leftTrigger, rightTrigger, 30000);
+        const int strength = LauncherControl::pad(SDL_GameControllerName(state->controller)).rumblePercent;
+        const int rc = SDL_GameControllerRumbleTriggers(state->controller, (Uint16)(leftTrigger * strength / 100),
+                                                        (Uint16)(rightTrigger * strength / 100), 30000);
         if (rc != 0) {
             SDL_LogWarn(SDL_LOG_CATEGORY_APPLICATION,
                         "Trigger rumble player %d slot %d rc %d: %s",
@@ -1126,15 +1301,17 @@ void SdlInputHandler::setMotionEventState(uint16_t controllerNumber, uint8_t mot
         }
 
         uint8_t reportPeriodMs = reportRateHz ? (1000 / reportRateHz) : 0;
+        // Launcher mode: sensors stay off for a controller whose motion is off (the request is kept).
+        SDL_bool enable = reportRateHz && launcherPad(state).motion ? SDL_TRUE : SDL_FALSE;
         switch (motionType) {
         case LI_MOTION_TYPE_ACCEL:
             state->accelReportPeriodMs = reportPeriodMs;
-            SDL_GameControllerSetSensorEnabled(state->controller, SDL_SENSOR_ACCEL, reportRateHz ? SDL_TRUE : SDL_FALSE);
+            SDL_GameControllerSetSensorEnabled(state->controller, SDL_SENSOR_ACCEL, enable);
             break;
 
         case LI_MOTION_TYPE_GYRO:
             state->gyroReportPeriodMs = reportPeriodMs;
-            SDL_GameControllerSetSensorEnabled(state->controller, SDL_SENSOR_GYRO, reportRateHz ? SDL_TRUE : SDL_FALSE);
+            SDL_GameControllerSetSensorEnabled(state->controller, SDL_SENSOR_GYRO, enable);
             break;
         }
     }
@@ -1275,7 +1452,9 @@ int SdlInputHandler::getAttachedGamepadMask()
             SDL_JoystickGetGUIDString(SDL_JoystickGetDeviceGUID(i),
                                       guidStr, sizeof(guidStr));
 
-            if (!m_IgnoreDeviceGuids.contains(guidStr, Qt::CaseInsensitive))
+            // Launcher mode: controllers attached on use aren't there for the host yet.
+            if (!m_IgnoreDeviceGuids.contains(guidStr, Qt::CaseInsensitive) &&
+                    (!LauncherControl::pad(SDL_GameControllerNameForIndex(i)).attachOnUse || LauncherControl::isFirstPad(i)))
             {
                 mask |= (1 << count++);
             }

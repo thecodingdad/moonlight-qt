@@ -5,6 +5,7 @@
 
 #include "SDL_compat.h"
 #include "dualsensetriggers.h"
+#include "streaming/launchercontrol.h"
 
 
 struct GamepadState {
@@ -41,6 +42,16 @@ struct GamepadState {
     short lsX, lsY;
     short rsX, rsY;
     unsigned char lt, rt;
+
+    // Launcher mode: this controller's own settings (refreshed when they change).
+    LauncherPad launcherPad;
+    int launcherPadGeneration;
+    // Not announced to the host before its first input (LauncherPad::attachOnUse).
+    bool attachPending;
+    // Touchpad as mouse: the finger's last position.
+    bool touchMouseDown;
+    float touchMouseX, touchMouseY;
+    float touchMouseRestX, touchMouseRestY;
 };
 
 
@@ -80,6 +91,9 @@ public:
 
     // The launcher's menu is open over the stream: pads released on the host, mouse set free.
     void setLauncherMenu(bool open);
+
+    // The launcher's controller settings changed (motion sensors follow).
+    void launcherPadsChanged();
 
     void handleControllerButtonEvent(SDL_ControllerButtonEvent* event);
 
@@ -143,6 +157,15 @@ public:
     QString getUnmappedGamepads();
 
 private:
+    // Launcher mode: the controller's own settings.
+    const LauncherPad& launcherPad(GamepadState* state);
+
+    // A controller waiting for its first input (LauncherPad::attachOnUse) is announced now.
+    void attachOnInput(GamepadState* state);
+
+    // Touchpad as mouse: moves and clicks the host's mouse instead of its touchpad.
+    void touchpadMouseEvent(GamepadState* state, SDL_ControllerTouchpadEvent* event);
+
     enum KeyCombo {
         KeyComboQuit,
         KeyComboUngrabInput,
