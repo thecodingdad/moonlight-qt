@@ -40,9 +40,11 @@ struct SDL_Window;
 // never reach Windows, so the launcher's hotkey can't fire): it is caught here instead, kept from
 // the host and reported as "LAUNCHER-HOTKEY". "hotkey <spec>" on stdin changes it ("hotkey" alone: none).
 //
-// MOONLIGHT_LAUNCHER_PADS='{"<SDL controller name>":{"deadzone":10,"rumble":80,"motion":false,
+// MOONLIGHT_LAUNCHER_PADS='{"<vendor:product[:serial]>":{"deadzone":10,"rumble":80,"motion":false,
 // "battery":true,"swap":false,"touchpadMouse":false,"attachOnUse":false}, …}' sets each controller's own
-// settings (missing keys and controllers: Moonlight's defaults). "pads <same JSON>" on stdin replaces
+// settings (missing keys and controllers: Moonlight's defaults). Controllers are found by USB vendor
+// and product id (4 lower-case hex digits each) and SDL's serial number where there is one, else
+// by "vendor:product" alone. "pads <same JSON>" on stdin replaces
 // them during the stream. deadzone: radial stick dead zone in percent; rumble: strength in percent;
 // motion: gyro / accelerometer for the host; battery: report the battery level; swap: A/B and X/Y
 // swapped (absent: the global setting); touchpadMouse: the touchpad moves the host's mouse (its
@@ -65,8 +67,9 @@ struct LauncherPad {
 class LauncherControl
 {
 public:
-    // The settings of the controller with this SDL name (defaults outside launcher mode).
-    static LauncherPad pad(const char* name);
+    // The settings of a controller: by "vendor:product:serial" (serial may be null or empty), else by
+    // "vendor:product" (defaults outside launcher mode or for unknown controllers).
+    static LauncherPad pad(unsigned short vendor, unsigned short product, const char* serial);
 
     // Changes with every new set of controller settings (to refresh cached copies).
     static int padsGeneration() { return s_PadsGeneration.load(); }

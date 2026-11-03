@@ -239,7 +239,8 @@ const LauncherPad& SdlInputHandler::launcherPad(GamepadState* state)
 {
     int generation = LauncherControl::padsGeneration() + 1;
     if (state->launcherPadGeneration != generation) {
-        state->launcherPad = LauncherControl::pad(SDL_GameControllerName(state->controller));
+        state->launcherPad = LauncherControl::pad(SDL_GameControllerGetVendor(state->controller), SDL_GameControllerGetProduct(state->controller),
+                                                  SDL_GameControllerGetSerial(state->controller));
         state->launcherPadGeneration = generation;
     }
     return state->launcherPad;
@@ -1189,7 +1190,8 @@ void SdlInputHandler::rumble(unsigned short controllerNumber, unsigned short low
         routed = true;
         if (DualSenseHaptics::playing(controllerNumber)) continue;
         // Launcher mode: the controller's own strength.
-        const int strength = LauncherControl::pad(SDL_GameControllerName(state->controller)).rumblePercent;
+        const int strength = LauncherControl::pad(SDL_GameControllerGetVendor(state->controller), SDL_GameControllerGetProduct(state->controller),
+                                                  SDL_GameControllerGetSerial(state->controller)).rumblePercent;
         const int rc = SDL_GameControllerRumble(state->controller, (Uint16)(lowFreqMotor * strength / 100),
                                                 (Uint16)(highFreqMotor * strength / 100), 30000);
 
@@ -1274,7 +1276,8 @@ void SdlInputHandler::rumbleTriggers(uint16_t controllerNumber, uint16_t leftTri
         if (state->controller == nullptr || state->index != (short)controllerNumber) {
             continue;
         }
-        const int strength = LauncherControl::pad(SDL_GameControllerName(state->controller)).rumblePercent;
+        const int strength = LauncherControl::pad(SDL_GameControllerGetVendor(state->controller), SDL_GameControllerGetProduct(state->controller),
+                                                  SDL_GameControllerGetSerial(state->controller)).rumblePercent;
         const int rc = SDL_GameControllerRumbleTriggers(state->controller, (Uint16)(leftTrigger * strength / 100),
                                                         (Uint16)(rightTrigger * strength / 100), 30000);
         if (rc != 0) {
@@ -1454,7 +1457,8 @@ int SdlInputHandler::getAttachedGamepadMask()
 
             // Launcher mode: controllers attached on use aren't there for the host yet.
             if (!m_IgnoreDeviceGuids.contains(guidStr, Qt::CaseInsensitive) &&
-                    (!LauncherControl::pad(SDL_GameControllerNameForIndex(i)).attachOnUse || LauncherControl::isFirstPad(i)))
+                    (!LauncherControl::pad(SDL_JoystickGetDeviceVendor(i), SDL_JoystickGetDeviceProduct(i), nullptr).attachOnUse ||
+                     LauncherControl::isFirstPad(i)))
             {
                 mask |= (1 << count++);
             }

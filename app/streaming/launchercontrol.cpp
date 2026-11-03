@@ -95,13 +95,20 @@ void LauncherControl::setPads(const QByteArray& json)
     s_PadsGeneration++;
 }
 
-LauncherPad LauncherControl::pad(const char* name)
+LauncherPad LauncherControl::pad(unsigned short vendor, unsigned short product, const char* serial)
 {
-    if (!s_Active || name == nullptr) {
+    if (!s_Active) {
         return LauncherPad();
     }
+    QString model = QString::asprintf("%04x:%04x", vendor, product);
     QMutexLocker lock(&s_PadsLock);
-    return s_Pads.value(QString::fromUtf8(name), LauncherPad());
+    if (serial != nullptr && serial[0] != '\0') {
+        auto it = s_Pads.constFind(model + ':' + QString::fromUtf8(serial));
+        if (it != s_Pads.constEnd()) {
+            return it.value();
+        }
+    }
+    return s_Pads.value(model, LauncherPad());
 }
 
 std::atomic<int> LauncherControl::s_HotkeyKey { 0 };
