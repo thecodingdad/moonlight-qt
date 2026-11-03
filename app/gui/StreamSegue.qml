@@ -22,6 +22,11 @@ Item {
 
     function stageFailed(stage, errorCode, failingPorts)
     {
+        if (launcherMode) {
+            // The launcher retries a start that didn't get going (and then shows the error itself).
+            console.error("LAUNCHER-STARTFAILED: " + stage + " · " + errorCode)
+        }
+
         // Display the error dialog after Session::exec() returns
         streamSegueErrorDialog.text = qsTr("Starting %1 failed: Error %2").arg(stage).arg(errorCode)
 

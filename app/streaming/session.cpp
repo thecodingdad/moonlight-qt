@@ -2,6 +2,7 @@
 #include <QNetworkInterface>
 #include <QSysInfo>
 #include <QDir>
+#include <cstdio>
 #include "session.h"
 #include "streaming/launchercontrol.h"
 #include "settings/streamingpreferences.h"
@@ -106,6 +107,14 @@ void Session::clConnectionTerminated(int errorCode)
 {
     unsigned int portFlags = LiGetPortFlagsFromTerminationErrorCode(errorCode);
     s_ActiveSession->m_PortTestResults = LiTestClientConnectivity(CONN_TEST_SERVER, 443, portFlags);
+
+    // Launcher: a stream that ended right at its start (or never sent video) didn't get going;
+    // the launcher retries it.
+    if (LauncherControl::active() &&
+            (errorCode == ML_ERROR_NO_VIDEO_TRAFFIC || errorCode == ML_ERROR_UNEXPECTED_EARLY_TERMINATION)) {
+        std::fprintf(stderr, "LAUNCHER-STARTFAILED: %d\n", errorCode);
+        std::fflush(stderr);
+    }
 
     // Display the termination dialog if this was not intended
     switch (errorCode) {
