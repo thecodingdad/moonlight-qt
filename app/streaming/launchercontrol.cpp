@@ -115,11 +115,15 @@ std::atomic<int> LauncherControl::s_HotkeyKey { 0 };
 std::atomic<int> LauncherControl::s_HotkeyMods { 0 };
 std::atomic<bool> LauncherControl::s_HotkeyDown { false };
 
-// "ctrl+alt+M": modifier names, then an SDL key name. Anything else: no hotkey.
-void LauncherControl::setHotkey(const char* spec)
+std::atomic<int> LauncherControl::s_DisconnectKey { 0 };
+std::atomic<int> LauncherControl::s_DisconnectMods { 0 };
+std::atomic<bool> LauncherControl::s_DisconnectDown { false };
+
+// "ctrl+alt+M": modifier names, then an SDL key name. Anything else (or no modifier): none.
+void LauncherControl::parseShortcut(const char* spec, int& mods, int& key)
 {
-    int mods = 0;
-    SDL_Keycode key = SDLK_UNKNOWN;
+    mods = 0;
+    SDL_Keycode found = SDLK_UNKNOWN;
     const QStringList parts = QString::fromUtf8(spec).split('+', Qt::SkipEmptyParts);
     for (int i = 0; i < parts.size(); i++) {
         const QString part = parts[i].trimmed();
@@ -128,33 +132,60 @@ void LauncherControl::setHotkey(const char* spec)
             else if (part.compare("alt", Qt::CaseInsensitive) == 0) mods |= KMOD_ALT;
             else if (part.compare("shift", Qt::CaseInsensitive) == 0) mods |= KMOD_SHIFT;
         } else {
-            key = SDL_GetKeyFromName(part.toUtf8().constData());
+            found = SDL_GetKeyFromName(part.toUtf8().constData());
         }
     }
+    key = (mods != 0 && found != SDLK_UNKNOWN) ? found : 0;
+}
+
+bool LauncherControl::shortcutMatches(int key, int mods, int sdlKeycode, int sdlMods)
+{
+    if (key == 0 || sdlKeycode != key) {
+        return false;
+    }
+    auto has = [sdlMods](int mask) { return (sdlMods & mask) != 0; };
+    return has(KMOD_CTRL) == ((mods & KMOD_CTRL) != 0) && has(KMOD_ALT) == ((mods & KMOD_ALT) != 0) &&
+           has(KMOD_SHIFT) == ((mods & KMOD_SHIFT) != 0);
+}
+
+void LauncherControl::setHotkey(const char* spec)
+{
+    int mods, key;
+    parseShortcut(spec, mods, key);
     s_HotkeyMods = mods;
-    s_HotkeyKey = (mods != 0 && key != SDLK_UNKNOWN) ? key : 0;
+    s_HotkeyKey = key;
 }
 
 bool LauncherControl::isHotkey(int sdlKeycode, int sdlMods, bool pressed)
 {
-    const int key = s_HotkeyKey.load();
-    if (!s_Active || key == 0 || sdlKeycode != key) {
+    if (!s_Active) {
         return false;
     }
     if (!pressed) {
         // The release of a press we took stays here too.
-        return s_HotkeyDown.exchange(false);
-    }
-    const int wanted = s_HotkeyMods.load();
-    auto has = [sdlMods](int mask) { return (sdlMods & mask) != 0; };
-    if (has(KMOD_CTRL) != ((wanted & KMOD_CTRL) != 0) || has(KMOD_ALT) != ((wanted & KMOD_ALT) != 0) ||
-            has(KMOD_SHIFT) != ((wanted & KMOD_SHIFT) != 0)) {
+        if (sdlKeycode == s_HotkeyKey.load() && s_HotkeyDown.exchange(false)) return true;
+        if (sdlKeycode == s_DisconnectKey.load() && s_DisconnectDown.exchange(false)) return true;
         return false;
     }
-    s_HotkeyDown = true;
-    std::fprintf(stderr, "LAUNCHER-HOTKEY\n");
-    std::fflush(stderr);
-    return true;
+    if (shortcutMatches(s_HotkeyKey.load(), s_HotkeyMods.load(), sdlKeycode, sdlMods)) {
+        s_HotkeyDown = true;
+        std::fprintf(stderr, "LAUNCHER-HOTKEY\n");
+        std::fflush(stderr);
+        return true;
+    }
+    if (shortcutMatches(s_DisconnectKey.load(), s_DisconnectMods.load(), sdlKeycode, sdlMods)) {
+        s_DisconnectDown = true;
+        // Like "disconnect": the stream ends, the app keeps running on the host.
+        QMetaObject::invokeMethod(QCoreApplication::instance(), [] {
+            Session* session = Session::get();
+            if (session != nullptr) {
+                session->setShouldExitKeepingApp();
+                session->interrupt();
+            }
+        }, Qt::QueuedConnection);
+        return true;
+    }
+    return false;
 }
 
 void LauncherControl::start()
@@ -164,6 +195,12 @@ void LauncherControl::start()
     }
     s_Active = true;
     setHotkey(qgetenv("MOONLIGHT_LAUNCHER_HOTKEY").constData());
+    {
+        int mods, key;
+        parseShortcut(qgetenv("MOONLIGHT_LAUNCHER_DISCONNECT_KEY").constData(), mods, key);
+        s_DisconnectMods = mods;
+        s_DisconnectKey = key;
+    }
     setPads(qgetenv("MOONLIGHT_LAUNCHER_PADS"));
     s_Mouse = qgetenv("MOONLIGHT_LAUNCHER_MOUSE") == "1";
     bool ok = false;
@@ -256,6 +293,13 @@ void LauncherControl::handle(const char* line)
     }
     if (std::strncmp(line, "hotkey", 6) == 0 && (line[6] == '\0' || line[6] == ' ')) {
         setHotkey(line[6] == ' ' ? line + 7 : "");
+        return;
+    }
+    if (std::strncmp(line, "disconnectkey", 13) == 0 && (line[13] == '\0' || line[13] == ' ')) {
+        int mods, key;
+        parseShortcut(line[13] == ' ' ? line + 14 : "", mods, key);
+        s_DisconnectMods = mods;
+        s_DisconnectKey = key;
         return;
     }
     if (std::strcmp(line, "quit") == 0 || std::strcmp(line, "disconnect") == 0) {

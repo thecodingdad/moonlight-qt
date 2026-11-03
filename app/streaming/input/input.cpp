@@ -1,6 +1,7 @@
 #include <Limelight.h>
 #include "SDL_compat.h"
 #include "streaming/session.h"
+#include "streaming/launchercontrol.h"
 #include "settings/mappingmanager.h"
 #include "streaming/input/dualsensehaptics.h"
 #include "path.h"
@@ -74,7 +75,8 @@ SdlInputHandler::SdlInputHandler(StreamingPreferences& prefs, int streamWidth, i
     m_SpecialKeyCombos[KeyComboQuit].keyCombo = KeyComboQuit;
     m_SpecialKeyCombos[KeyComboQuit].keyCode = SDLK_q;
     m_SpecialKeyCombos[KeyComboQuit].scanCode = SDL_SCANCODE_Q;
-    m_SpecialKeyCombos[KeyComboQuit].enabled = true;
+    // Launcher mode: the launcher's own disconnect shortcut instead (MOONLIGHT_LAUNCHER_DISCONNECT_KEY).
+    m_SpecialKeyCombos[KeyComboQuit].enabled = !LauncherControl::active();
 
     m_SpecialKeyCombos[KeyComboUngrabInput].keyCombo = KeyComboUngrabInput;
     m_SpecialKeyCombos[KeyComboUngrabInput].keyCode = SDLK_z;
@@ -119,7 +121,7 @@ SdlInputHandler::SdlInputHandler(StreamingPreferences& prefs, int streamWidth, i
     m_SpecialKeyCombos[KeyComboQuitAndExit].keyCombo = KeyComboQuitAndExit;
     m_SpecialKeyCombos[KeyComboQuitAndExit].keyCode = SDLK_e;
     m_SpecialKeyCombos[KeyComboQuitAndExit].scanCode = SDL_SCANCODE_E;
-    m_SpecialKeyCombos[KeyComboQuitAndExit].enabled = true;
+    m_SpecialKeyCombos[KeyComboQuitAndExit].enabled = !LauncherControl::active();
 
     m_SpecialKeyCombos[KeyComboToggleKeyboardGrab].keyCombo = KeyComboToggleKeyboardGrab;
     m_SpecialKeyCombos[KeyComboToggleKeyboardGrab].keyCode = SDLK_k;

@@ -40,6 +40,9 @@ struct SDL_Window;
 // never reach Windows, so the launcher's hotkey can't fire): it is caught here instead, kept from
 // the host and reported as "LAUNCHER-HOTKEY". "hotkey <spec>" on stdin changes it ("hotkey" alone: none).
 //
+// MOONLIGHT_LAUNCHER_DISCONNECT_KEY (same form) ends the stream, the app keeps running on the host;
+// "disconnectkey <spec>" changes it. Moonlight's own Ctrl+Alt+Shift+Q / +E are off in launcher mode.
+//
 // MOONLIGHT_LAUNCHER_PADS='{"<vendor:product[:serial]>":{"deadzone":10,"rumble":80,"motion":false,
 // "battery":true,"swap":false,"touchpadMouse":false,"attachOnUse":false}, …}' sets each controller's own
 // settings (missing keys and controllers: Moonlight's defaults). Controllers are found by USB vendor
@@ -125,6 +128,12 @@ private:
     static std::atomic<bool> s_OverlayShown;
     static std::atomic<int> s_AudioDrops;
     static void setHotkey(const char* spec);
+    // "ctrl+alt+M" into SDL modifiers and key (key 0: none).
+    static void parseShortcut(const char* spec, int& mods, int& key);
+    static bool shortcutMatches(int key, int mods, int sdlKeycode, int sdlMods);
+    static std::atomic<int> s_DisconnectKey;
+    static std::atomic<int> s_DisconnectMods;
+    static std::atomic<bool> s_DisconnectDown;
     static void setPads(const QByteArray& json);
     static QMutex s_PadsLock;
     static QHash<QString, LauncherPad> s_Pads;
