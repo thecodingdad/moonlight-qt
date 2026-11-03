@@ -149,8 +149,13 @@ for /f "usebackq delims=" %%i in (`%VSWHERE% -latest -property installationPath`
 )
 if !ERRORLEVEL! NEQ 0 goto Error
 
-rem Find VC redistributable DLLs
-for /f "usebackq delims=" %%i in (`%VSWHERE% -latest -find VC\Redist\MSVC\*\%ARCH%\Microsoft.VC*.CRT`) do set VC_REDIST_DLL_PATH=%%i
+rem Find VC redistributable DLLs (also in a Build Tools installation: -products *)
+for /f "usebackq delims=" %%i in (`%VSWHERE% -latest -products * -find VC\Redist\MSVC\*\%ARCH%\Microsoft.VC*.CRT`) do set VC_REDIST_DLL_PATH=%%i
+rem Without it "copy \*.dll" below would take whatever DLLs lie in the drive's root
+if not defined VC_REDIST_DLL_PATH (
+    echo Unable to find the VC redistributable DLLs
+    goto Error
+)
 
 echo Cleaning output directories
 rmdir /s /q %DEPLOY_FOLDER%
