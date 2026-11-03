@@ -1,3 +1,4 @@
+#include "streaming/launchercontrol.h"
 #include "streaming/session.h"
 
 #include <Limelight.h>
@@ -190,6 +191,11 @@ void SdlInputHandler::handleKeyEvent(SDL_KeyboardEvent* event)
     if (event->repeat) {
         // Ignore repeat key down events
         SDL_assert(event->state == SDL_PRESSED);
+        return;
+    }
+
+    // The launcher's menu shortcut: for the launcher, not for the host.
+    if (LauncherControl::isHotkey(event->keysym.sym, event->keysym.mod, event->state == SDL_PRESSED)) {
         return;
     }
 

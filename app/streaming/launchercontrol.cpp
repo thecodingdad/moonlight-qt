@@ -4,6 +4,7 @@
 #include <QCoreApplication>
 #include <QImage>
 #include <QMetaObject>
+#include <QStringList>
 
 #include "SDL_compat.h"
 #include <SDL_syswm.h>
@@ -65,12 +66,59 @@ bool LauncherControl::isFirstPad(int deviceIndex)
     return before == ordinal;
 }
 
+std::atomic<int> LauncherControl::s_HotkeyKey { 0 };
+std::atomic<int> LauncherControl::s_HotkeyMods { 0 };
+std::atomic<bool> LauncherControl::s_HotkeyDown { false };
+
+// "ctrl+alt+M": modifier names, then an SDL key name. Anything else: no hotkey.
+void LauncherControl::setHotkey(const char* spec)
+{
+    int mods = 0;
+    SDL_Keycode key = SDLK_UNKNOWN;
+    const QStringList parts = QString::fromUtf8(spec).split('+', Qt::SkipEmptyParts);
+    for (int i = 0; i < parts.size(); i++) {
+        const QString part = parts[i].trimmed();
+        if (i < parts.size() - 1) {
+            if (part.compare("ctrl", Qt::CaseInsensitive) == 0) mods |= KMOD_CTRL;
+            else if (part.compare("alt", Qt::CaseInsensitive) == 0) mods |= KMOD_ALT;
+            else if (part.compare("shift", Qt::CaseInsensitive) == 0) mods |= KMOD_SHIFT;
+        } else {
+            key = SDL_GetKeyFromName(part.toUtf8().constData());
+        }
+    }
+    s_HotkeyMods = mods;
+    s_HotkeyKey = (mods != 0 && key != SDLK_UNKNOWN) ? key : 0;
+}
+
+bool LauncherControl::isHotkey(int sdlKeycode, int sdlMods, bool pressed)
+{
+    const int key = s_HotkeyKey.load();
+    if (!s_Active || key == 0 || sdlKeycode != key) {
+        return false;
+    }
+    if (!pressed) {
+        // The release of a press we took stays here too.
+        return s_HotkeyDown.exchange(false);
+    }
+    const int wanted = s_HotkeyMods.load();
+    auto has = [sdlMods](int mask) { return (sdlMods & mask) != 0; };
+    if (has(KMOD_CTRL) != ((wanted & KMOD_CTRL) != 0) || has(KMOD_ALT) != ((wanted & KMOD_ALT) != 0) ||
+            has(KMOD_SHIFT) != ((wanted & KMOD_SHIFT) != 0)) {
+        return false;
+    }
+    s_HotkeyDown = true;
+    std::fprintf(stderr, "LAUNCHER-HOTKEY\n");
+    std::fflush(stderr);
+    return true;
+}
+
 void LauncherControl::start()
 {
     if (!qEnvironmentVariableIsSet("MOONLIGHT_LAUNCHER_MODE")) {
         return;
     }
     s_Active = true;
+    setHotkey(qgetenv("MOONLIGHT_LAUNCHER_HOTKEY").constData());
     s_Mouse = qgetenv("MOONLIGHT_LAUNCHER_MOUSE") == "1";
     bool ok = false;
     float speed = qEnvironmentVariable("MOONLIGHT_LAUNCHER_MOUSE_SPEED").toFloat(&ok);
@@ -149,6 +197,10 @@ void LauncherControl::start()
 
 void LauncherControl::handle(const char* line)
 {
+    if (std::strncmp(line, "hotkey", 6) == 0 && (line[6] == '\0' || line[6] == ' ')) {
+        setHotkey(line[6] == ' ' ? line + 7 : "");
+        return;
+    }
     if (std::strcmp(line, "quit") == 0 || std::strcmp(line, "disconnect") == 0) {
         bool quitApp = std::strcmp(line, "quit") == 0;
         // The session lives on the main thread.

@@ -32,6 +32,11 @@ struct SDL_Window;
 // MOONLIGHT_LAUNCHER_FIRST_PAD="<n>:<name>" names the pad that started the stream (the n-th connected
 // game controller of that name, from 0): it becomes player 1, the others leave that slot free for it.
 //
+// MOONLIGHT_LAUNCHER_HOTKEY="ctrl+alt+M" (modifiers ctrl / alt / shift, then an SDL key name) is the
+// launcher's own keyboard shortcut for its menu. The stream grabs the keyboard (Ctrl, Alt, Shift
+// never reach Windows, so the launcher's hotkey can't fire): it is caught here instead, kept from
+// the host and reported as "LAUNCHER-HOTKEY". "hotkey <spec>" on stdin changes it ("hotkey" alone: none).
+//
 // In launcher mode the launcher owns the gamepad combos: the built-in ones (Start held for the
 // mouse, Start+Select+L1+R1 to quit, Select+L1+R1+X/Y for the overlays) are off.
 class LauncherControl
@@ -51,6 +56,10 @@ public:
     static void publishStats(const char* text);
 
     static bool menuOpen() { return s_Menu.load(); }
+
+    // The launcher's menu shortcut: true when this key event is it (reported on press, both
+    // press and release kept from the host).
+    static bool isHotkey(int sdlKeycode, int sdlMods, bool pressed);
 
     // Whether the device at SDL device index deviceIndex is the pad that started the stream.
     static bool isFirstPad(int deviceIndex);
@@ -83,4 +92,8 @@ private:
     static std::atomic<bool> s_FramesLost;
     static std::atomic<bool> s_OverlayShown;
     static std::atomic<int> s_AudioDrops;
+    static void setHotkey(const char* spec);
+    static std::atomic<int> s_HotkeyKey;
+    static std::atomic<int> s_HotkeyMods;
+    static std::atomic<bool> s_HotkeyDown;
 };
