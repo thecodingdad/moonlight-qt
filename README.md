@@ -1,3 +1,20 @@
+# Moonlight PC for GameLodge
+
+This is a fork of [Moonlight PC](https://github.com/Nonary/moonlight-qt) (Nonary's fork of [moonlight-qt](https://github.com/moonlight-stream/moonlight-qt)) with changes for its deep integration into [GameLodge](https://github.com/thecodingdad/gamelodge), a controller-first game launcher. GameLodge bundles it as the streaming client of its Windows app; it isn't meant to be used on its own. For a standalone streaming client use [Moonlight PC](https://github.com/moonlight-stream/moonlight-qt) itself.
+
+The changes live on the `launcher` branch and are kept small, so upstream updates merge cleanly:
+
+- Launcher mode: a control channel to the launcher (mouse emulation and overlay commands, Apollo server commands), the launcher's menu and disconnect shortcuts caught in the stream
+- Controllers matched by vendor, product and serial with each controller's own stream settings; the pad that started the stream becomes player 1
+- Mouse emulation with the launcher's speed curve
+- Connection reports and failed stream starts sent to the launcher, longer host timeouts
+- One taskbar button together with the launcher, the window hidden until the first picture
+- Windows build fixes (VC runtime lookup)
+
+Licensed under GPLv3 like Moonlight. The original README follows.
+
+---
+
 # Moonlight PC
 
 [Moonlight PC](https://moonlight-stream.org) is an open source PC client for NVIDIA GameStream and [Sunshine](https://github.com/LizardByte/Sunshine).
