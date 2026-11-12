@@ -6,13 +6,23 @@
 #include "SDL_compat.h"
 #include "dualsensetriggers.h"
 #include "streaming/launchercontrol.h"
+#include "steamcontroller/steamcontrollersdl.h"
+
+#include <memory>
+
+class SteamControllerHost;
+class SteamControllerLink;
 
 
 struct GamepadState {
     SDL_GameController* controller;
     bool hapticsAttached;
+    bool speakerPcmAttached;
     SDL_JoystickID jsId;
     short index;
+    // Owned by the Steam Controller (2026) driver, not SDL: controller stays null and the SDL
+    // loops skip it; the slot only reserves the player index and the gamepad mask bit.
+    bool steamOwned;
 
 #if !SDL_VERSION_ATLEAST(2, 0, 9)
     SDL_Haptic* haptic;
@@ -29,11 +39,11 @@ struct GamepadState {
     bool emulatedClickpadButtonDown;
 
 #if SDL_VERSION_ATLEAST(2, 0, 14)
-    uint8_t gyroReportPeriodMs;
+    uint16_t gyroReportPeriodMs;
     float lastGyroEventData[SDL_arraysize(SDL_ControllerSensorEvent::data)];
     uint32_t lastGyroEventTime;
 
-    uint8_t accelReportPeriodMs;
+    uint16_t accelReportPeriodMs;
     float lastAccelEventData[SDL_arraysize(SDL_ControllerSensorEvent::data)];
     uint32_t lastAccelEventTime;
 #endif
@@ -112,6 +122,9 @@ public:
 #endif
 
     void handleJoystickArrivalEvent(SDL_JoyDeviceEvent* event);
+
+    // SDL_CODE_STEAM_CONTROLLER_LINK: a Steam Controller (2026) link came or went (main thread).
+    void handleSteamControllerEvent(SDL_UserEvent* event);
 
     void sendText(QString& string);
 
@@ -197,6 +210,14 @@ private:
 
     void sendGamepadBatteryState(GamepadState* state, SDL_JoystickPowerLevel level);
 
+    void updateSteamGamepadMask();
+
+#if HAVE_STEAM_CONTROLLER_DRIVER
+    void steamControllerConnected(const std::shared_ptr<SteamControllerLink>& link, int generation);
+
+    void steamControllerDisconnected(int linkId, int generation);
+#endif
+
     void handleAbsoluteFingerEvent(SDL_TouchFingerEvent* event);
 
     void emulateAbsoluteFingerEvent(SDL_TouchFingerEvent* event);
@@ -241,8 +262,17 @@ private:
     bool m_KeyboardCaptureActive;
     QString m_OldIgnoreDevices;
     QString m_OldIgnoreDevicesExcept;
+#if HAVE_STEAM_CONTROLLER_DRIVER
+    bool m_SteamHintChanged;
+    QString m_OldHidapiSteamHint;
+    SteamControllerHost* m_SteamHost;
+    SteamControllerRunner* m_SteamController;
+    std::shared_ptr<SteamControllerLink> m_SteamLinks[MAX_GAMEPADS];
+    int m_SteamLinkGeneration[MAX_GAMEPADS];
+#endif
     QStringList m_IgnoreDeviceGuids;
     StreamingPreferences::CaptureSysKeysMode m_CaptureSystemKeysMode;
+    bool m_BackgroundGamepad;
     int m_MouseCursorCapturedVisibilityState;
 
     struct {

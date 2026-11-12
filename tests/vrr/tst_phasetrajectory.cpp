@@ -72,13 +72,155 @@ void compressionAndAcceptance() {
     check(late.carryUs>=6690-250-200 && late.carryUs<=6690+200,
         "lateness beyond the usual overshoot is carried, minus one drain step");
 }
+void bufferReleaseDoesNotCreateCarry() {
+    for (bool current : {false, true}) {
+        Vrr13::PhaseTrajectory trajectory;
+        trajectory.setDrainAtAllowance(true, current);
+        trajectory.plan(1, 100000, 101000, 101000, 101000, 8333, 0, 500, 10000, true);
+        trajectory.commit(1, 100000, 101000, 101000, true, false, true);
+        const auto next = trajectory.plan(2, 110000, 110999, 110999, 110999,
+            8333, 0, 500, 10000, true);
+        check(next.carryUs == (current ? 0u : 1u) && next.targetUs >= 109333,
+            "one-microsecond buffer release stays outside recovery while recorded policy retains its carry");
+    }
+}
+void carryRepaymentKnobs() {
+    // 6690us carry before a 9719us intended successor, 750us allowance.
+    const auto planWith=[](uint64_t limit) {
+        Vrr13::PhaseTrajectory p;p.commit(1,100000,106690,106690,true,false,true);
+        return p.plan(2,109719,109719,109719,109719,8333,115023,750,9719,true,limit);
+    };
+    check(planWith(0).targetUs==116200,"no carry limit keeps the 1/32 repayment");
+    check(planWith(8000).targetUs==116200,"a carry limit above the carry changes nothing");
+    const auto capped=planWith(2000);
+    check(capped.targetUs==115023 && capped.capped==1,"a carry limit falls back to the physical ownership floor");
+}
+
+void extraDelayDoesNotChaseCurrentReadiness() {
+    Vrr13::PhaseTrajectory p;
+    p.plan(1,100000,100000,100000,100000,8333,0,500,10000,true,4000);
+    p.commit(1,100000,104000,104000,true,false,true);
+    uint64_t expectedExtra=0,previousMarginal=0;bool marginalChanged=false;
+    for(uint64_t readyExtra:{0ULL,1000ULL,3000ULL,7000ULL}) {
+        const auto s=p.plan(2,110000,110000,110000+readyExtra,110000+readyExtra,
+                            8333,0,500,10000,true,4000);
+        VrrTimingDecision d;d.originalTargetUs=110000;
+        d.requestedPhaseTargetUs=s.requestedTargetUs;d.cadenceSmoothingUs=713;d.trajectory=s;
+        const auto extra=d.plannedExtraDelayUs();
+        if(!expectedExtra) expectedExtra=extra;
+        check(extra==expectedExtra && extra==4588,
+              "the same retained recovery phase reports the same extra despite alternating current readiness");
+        check(s.targetUs==std::max(s.requestedTargetUs,110000+readyExtra),
+              "extra accounting preserves the actual readiness-bounded target");
+        marginalChanged|=previousMarginal && previousMarginal!=s.addedUs;
+        previousMarginal=s.addedUs;
+    }
+    check(marginalChanged,"fixture reproduces the old marginal-wait reporting oscillation");
+    Vrr13::PhaseTrajectory first;
+    VrrTimingDecision d;d.originalTargetUs=100000;d.requestedPhaseTargetUs=100000;
+    d.trajectory=first.plan(1,100000,100000,113000,113000,8333,0,500,10000,true,4000);
+    check(d.plannedExtraDelayUs()==0 && d.trajectory.targetUs==113000,
+          "a new late input stays a readiness overrun, not invented smoothing/recovery protection");
+    d.requestedPhaseTargetUs=102000;
+    check(d.plannedExtraDelayUs()==2000,"a requested physical floor remains visible independently of current readiness");
+    d.cadenceSmoothingUs=-2500;
+    check(d.plannedExtraDelayUs()==0,"negative smoothing cancels requested phase before the nonnegative clamp");
+    d.trajectory={};d.originalTargetUs=0;d.requestedPhaseTargetUs=std::numeric_limits<uint64_t>::max();
+    d.cadenceSmoothingUs=1;
+    check(d.plannedExtraDelayUs()==std::numeric_limits<uint64_t>::max(),"extra arithmetic saturates without wrapping");
+    d.requestedPhaseTargetUs=0;
+    d.cadenceSmoothingUs=std::numeric_limits<int64_t>::min();
+    check(d.plannedExtraDelayUs()==0,"the most negative phase clamps safely");
+}
+
 void decodeCompletionEstimate() {
     using C=VrrTimingController;
     check(C::estimateDecodeCompleteUs(1000,5000,3000,3800)==5000,"worker blocked on decode: its completion time is exact");
     check(C::estimateDecodeCompleteUs(1000,9000,20,3800)==4800,"finished while queued: output plus typical GPU decode, not the late observation");
     check(C::estimateDecodeCompleteUs(1000,3000,20,3800)==3000,"estimate never exceeds the observed completion bound");
-    check(C::estimateDecodeCompleteUs(1000,9000,20,0)==9000,"without a learned GPU time the observation is used");
+    check(C::estimateDecodeCompleteUs(1000,9000,20,0)==1000,"without a prompt GPU sample queued observation cannot create producer work");
+    check(C::estimateDecodeCompleteUs(1000,21000,500,2000)==3000,"a blocking late poll still contains queue residence");
+    check(C::estimateDecodeCompleteUs(1000,21000,500,0)==1000,"a blocking late poll cannot seed its own queue delay");
+    check(C::estimateDecodeCompleteUs(UINT64_MAX-5000,UINT64_MAX-100,20,6000)==UINT64_MAX-100,
+          "GPU completion estimate saturates at its observed bound without wrapping");
     check(C::estimateDecodeCompleteUs(1000,0,0,3800)==1000,"unknown completion falls back to decoder output");
+}
+// The normal production policy must never learn intentional queue residence as
+// GPU service, including a session with no prompt completion samples at all.
+void queuedDecodeCompletionDoesNotTrainInputDelay() {
+    for (const bool warm : {false, true}) {
+        VrrSessionConfig session;
+        session.streamRateHz=116; session.displayRefreshHz=120;
+        session.smoothFrameTiming=false;
+        session.experimentalInputPercentilePpm=1;
+        session.experimentalBoundedCatchup=true;
+        session.timingOptions={4000,9995,300,500};
+        auto policy=vrrTimingParametersForSession(session);
+        check(policy.normalizedSourceIntrinsicDecodeGpu==1,
+              "queue feedback regression exercises the existing production policy");
+        policy.playoutDelayStartSeedUs=22000;
+        VrrTimingController controller(session,true,policy);
+        uint64_t peakInput=0;
+        for (int i=0;i<1200;++i) {
+            const uint64_t source=1000000+uint64_t(i)*1000000/116;
+            const uint64_t output=source+500;
+            const bool prompt=warm && i<64;
+            const uint64_t wait=prompt?2000:500;
+            // Alternate queue residence by 5 ms without changing source or
+            // GPU service. The decrease is smaller than one source period,
+            // so observation time stays monotonic on every frame.
+            const uint64_t queue=(i/15)%2?15000:10000;
+            const uint64_t observed=output+(prompt?2000:queue+wait);
+            PacedFrame frame(nullptr,i,uint32_t(uint64_t(i)*90000/116),true,output);
+            frame.setDeliveryTimeline(source-200,source,source+100);
+            frame.noteGpuReadyUs(observed); frame.noteDecodeSyncWaitUs(wait);
+            const auto decision=controller.schedule(frame,observed);
+            check(decision.targetUs>=observed,
+                  "queue-neutral accounting still respects actual GPU readiness");
+            const auto ready=std::max(observed,decision.renderStartUs)+500;
+            controller.notePreparationDuration(500,0,ready);
+            controller.noteSchedulerDelays(0,0,true);
+            const auto submitted=std::max(ready,decision.targetUs);
+            controller.noteSubmission(true,false,submitted,submitted);
+            const auto input=controller.intervalStats().inputPercentile;
+            if(i>=256 && input.lastInputEligible)
+                peakInput=std::max(peakInput,uint64_t(std::max<int64_t>(0,input.lastInputRequiredUs)));
+        }
+        const auto target=controller.intervalStats().inputPercentile.targetUs;
+        check(peakInput<1000 && target<=1000,
+              "queued completion cannot become standing input protection");
+        check(controller.typicalDecodeGpuUs()==(warm?2000U:0U),
+              "only promptly collected completions train GPU service");
+        std::fprintf(stderr,"queued decode (%s): peak input %llu us, target %llu us, GPU estimate %llu us\n",
+            warm?"warm":"cold",(unsigned long long)peakInput,(unsigned long long)target,
+            (unsigned long long)controller.typicalDecodeGpuUs());
+    }
+
+    VrrSessionConfig session;
+    session.streamRateHz=60; session.displayRefreshHz=120;
+    session.smoothFrameTiming=false; session.experimentalInputPercentilePpm=1;
+    session.experimentalBoundedCatchup=true;
+    VrrTimingController controller(session,true,vrrTimingParametersForSession(session));
+    bool sawRealStall=false;
+    for(int i=0;i<180;++i) {
+        const uint64_t source=1000000+uint64_t(i)*1000000/60,output=source+500;
+        const uint64_t wait=i==120?6500:2000,observed=output+wait;
+        PacedFrame frame(nullptr,i,uint32_t(i*1500),true,output);
+        frame.setDeliveryTimeline(source-200,source,source+100);
+        frame.noteGpuReadyUs(observed); frame.noteDecodeSyncWaitUs(wait);
+        const auto decision=controller.schedule(frame,observed);
+        const auto ready=std::max(observed,decision.renderStartUs)+500;
+        controller.notePreparationDuration(500,0,ready);
+        controller.noteSchedulerDelays(0,0,true);
+        const auto submitted=std::max(ready,decision.targetUs);
+        controller.noteSubmission(true,false,submitted,submitted);
+        if(i==120) {
+            const auto input=controller.intervalStats().inputPercentile;
+            sawRealStall=input.lastInputEligible && input.lastInputRequiredUs>=4000;
+            check(decision.targetUs>=observed,"a promptly observed GPU stall still gates presentation");
+        }
+    }
+    check(sawRealStall,"prompt GPU stalls remain eligible input-lateness evidence");
 }
 void resyncAndLifecycle() {
     Vrr13::PhaseTrajectory p;p.commit(1,100000,106690,106690,true,false,true);
@@ -206,6 +348,7 @@ void legacyRecoveryCannotSustainCarry() {
     VrrTimingController c(session,true,policy);
     const uint64_t period=1000000/116;
     std::vector<uint64_t> carry,pushed;
+    uint64_t tailFrames=0,tailStillPushed=0;
     for(int i=0;i<2400;++i) {
         const uint64_t source=1000000+uint64_t(i)*period;
         const uint64_t decoded=source+500+(i%200==100?6000:0);
@@ -213,6 +356,10 @@ void legacyRecoveryCannotSustainCarry() {
         f.setDeliveryTimeline(decoded-800,decoded-600,decoded-500);
         const auto d=c.schedule(f,decoded);
         if(i>=1200) {carry.push_back(d.trajectory.carryUs);pushed.push_back(d.targetUs-d.originalTargetUs);}
+        if(i>=1200 && i%200>=180) {
+            ++tailFrames;
+            tailStillPushed+=d.trajectory.carryUs!=0 || d.targetUs!=d.originalTargetUs;
+        }
         const uint64_t ready=std::max(decoded,d.renderStartUs)+500;
         const uint64_t submission=std::max(ready,d.targetUs)+280;
         c.notePreparationDuration(500,0,ready);c.noteSchedulerDelays(0,0,true);c.noteSubmission(true,false,submission,submission);
@@ -220,10 +367,14 @@ void legacyRecoveryCannotSustainCarry() {
     std::sort(carry.begin(),carry.end());std::sort(pushed.begin(),pushed.end());
     const auto median=[](const std::vector<uint64_t>& v){return v[v.size()/2];};
     const auto p90=[](const std::vector<uint64_t>& v){return v[v.size()*9/10];};
-    std::fprintf(stderr,"legacy recovery with bounded catch-up: carry p50 %lluus p90 %lluus; target-plan p50 %lluus p90 %lluus\n",
+    std::fprintf(stderr,"bounded catch-up: carry p50 %lluus p90 %lluus; target-plan p50 %lluus p90 %lluus\n",
         (unsigned long long)median(carry),(unsigned long long)p90(carry),(unsigned long long)median(pushed),(unsigned long long)p90(pushed));
     check(median(carry)==0 && median(pushed)==0,"between late frames the schedule returns to its plan");
-    check(p90(carry)<1000,"carry from a 6 ms late frame drains instead of being re-imposed frame after frame");
+    // A 6 ms spike exceeds the permitted buffer, so test actual convergence.
+    check(tailFrames>0 && tailStillPushed==0,
+        "late frames drain all carry before the next spike");
+    check(p90(carry)<=policy.playoutCatchupCarryLimitUs,
+        "catch-up retains the selected carry ceiling");
 }
 void actualCadenceChangeQualification() {
     VrrSessionConfig session;session.streamRateHz=120;session.displayRefreshHz=144;session.smoothFrameTiming=false;
@@ -289,4 +440,42 @@ void actualControllerAndInputIsolation() {
     late.reset();check(late.trajectoryStats().plans==0,"controller full reset clears trajectory model");
 }
 }
-int main() {decodeCompletionEstimate();legacyRecoveryCannotSustainCarry();asyncDecodeCompletionPlanning();compressionAndAcceptance();resyncAndLifecycle();preparedSuccessorProof();sourceMappingFactorial();actualCadenceChangeQualification();actualControllerAndInputIsolation();std::fprintf(stderr,"phase trajectory integration: %s (%d failures)\n",failures?"FAIL":"PASS",failures);return failures?1:0;}
+// A D3D11 fence the worker blocked on is real completion, and render work follows
+// it, so both are evidence. Shaped like the 2026-11-03 Radeon 780M capture, where
+// decode alone took most of a 144 FPS frame. Other collection stays queue-neutral.
+void blockedDecodeFenceTrainsInputBuffer() {
+    const auto targetUs=[](bool asynchronousOutput,bool blocked) {
+        VrrSessionConfig session;
+        session.streamRateHz=144; session.displayRefreshHz=144;
+        session.smoothFrameTiming=false;
+        session.experimentalInputPercentilePpm=1;
+        session.experimentalBoundedCatchup=true;
+        session.timingOptions={2000,9995,300,500};
+        VrrTimingController controller(session,true,vrrTimingParametersForSession(session));
+        for(int i=0;i<2880;++i) {
+            const uint64_t source=1000000+uint64_t(i)*1000000/144,output=source+500;
+            const uint64_t complete=output+((i/8)%2?7500:5000);
+            const uint64_t collected=blocked?output+3000:output+((i/15)%2?15000:10000);
+            const uint64_t observed=blocked?complete:collected;
+            PacedFrame frame(nullptr,i,uint32_t(uint64_t(i)*90000/144),true,output);
+            frame.setDeliveryTimeline(source-200,source,source+100);
+            frame.setDecoderOutputComplete(!asynchronousOutput);
+            frame.noteGpuReadyUs(observed);
+            frame.noteDecodeSyncWaitUs(observed-collected);
+            const auto decision=controller.schedule(frame,observed);
+            const auto ready=std::max(observed,decision.renderStartUs)+2000;
+            controller.notePreparationDuration(2000,0,ready);
+            controller.noteSchedulerDelays(0,0,true);
+            const auto submitted=std::max(ready,decision.targetUs);
+            controller.noteSubmission(true,false,submitted,submitted);
+        }
+        return controller.intervalStats().inputPercentile.targetUs;
+    };
+    const auto blockedFence=targetUs(true,true);
+    std::fprintf(stderr,"blocked D3D11 fence target %llu us\n",(unsigned long long)blockedFence);
+    check(blockedFence>=8500 && blockedFence<=9750,
+          "blocked fence completion and render work set the buffer");
+    check(targetUs(true,false)<=1000,"an unblocked late collection stays queue-neutral on D3D11");
+    check(targetUs(false,true)<=1000,"other backends keep their decode estimate");
+}
+int main() {blockedDecodeFenceTrainsInputBuffer();extraDelayDoesNotChaseCurrentReadiness();bufferReleaseDoesNotCreateCarry();carryRepaymentKnobs();decodeCompletionEstimate();queuedDecodeCompletionDoesNotTrainInputDelay();legacyRecoveryCannotSustainCarry();asyncDecodeCompletionPlanning();compressionAndAcceptance();resyncAndLifecycle();preparedSuccessorProof();sourceMappingFactorial();actualCadenceChangeQualification();actualControllerAndInputIsolation();std::fprintf(stderr,"phase trajectory integration: %s (%d failures)\n",failures?"FAIL":"PASS",failures);return failures?1:0;}

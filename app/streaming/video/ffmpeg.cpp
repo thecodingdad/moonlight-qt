@@ -657,7 +657,8 @@ bool FFmpegVideoDecoder::completeInitialization(const AVCodec* decoder, enum AVP
     m_OriginalVideoHeight = params->height;
     m_StreamFps = params->frameRate;
     m_VideoFormat = params->videoFormat;
-    m_VrrUsesMaximumBuffer = params->vrrTimingOptions.resolved(params->vrrLatencyMode).bufferPerMille >= 4000;
+    m_VrrUsesMaximumBuffer = params->vrrTimingOptions.resolved(params->vrrLatencyMode).bufferPerMille >=
+        VrrTimingOptions::preset(0).bufferPerMille;
     m_CurrentTestMode = testMode;
 
     // Don't bother initializing Pacer if we're not actually going to render
@@ -1023,6 +1024,7 @@ void FFmpegVideoDecoder::addVideoStats(VIDEO_STATS& src, VIDEO_STATS& dst)
         dst.vrrGuardUs = src.vrrGuardUs;
         dst.vrrSourcePeriodUs = src.vrrSourcePeriodUs;
         dst.vrrAppliedBufferUs = src.vrrAppliedBufferUs;
+        dst.vrrAppliedSmoothingUs = src.vrrAppliedSmoothingUs;
         dst.vrrBufferCapUs = src.vrrBufferCapUs;
         dst.vrrGpuReadinessLeadUs = src.vrrGpuReadinessLeadUs;
         dst.vrrPrepareLatenessP50Us = src.vrrPrepareLatenessP50Us;
@@ -1182,6 +1184,7 @@ void FFmpegVideoDecoder::syncPacerTelemetry()
         m_ActiveWndVideoStats.vrrGuardUs = snapshot.vrrGuardUs;
         m_ActiveWndVideoStats.vrrSourcePeriodUs = snapshot.vrrSourcePeriodUs;
         m_ActiveWndVideoStats.vrrAppliedBufferUs = snapshot.vrrAppliedBufferUs;
+        m_ActiveWndVideoStats.vrrAppliedSmoothingUs = snapshot.vrrAppliedSmoothingUs;
         m_ActiveWndVideoStats.vrrBufferCapUs = snapshot.vrrBufferCapUs;
         m_ActiveWndVideoStats.vrrGpuReadinessLeadUs = snapshot.vrrGpuReadinessLeadUs;
         m_ActiveWndVideoStats.vrrPrepareLatenessP50Us =
@@ -1421,8 +1424,17 @@ void FFmpegVideoDecoder::stringifyVideoStats(VIDEO_STATS& stats, char* output, i
 
         offset += ret;
 
-        // Only advanced tracing replaces the normal rows with a breakdown.
-        if (!advancedStats || !stats.vrrPresentedFrames) {
+        // A VRR budget overlaps measured pacing waits. Present the complete
+        // measured interval once, with included components and one denominator.
+        if (!advancedStats && (stats.vrrTelemetryActive || stats.vrrPresentedFrames)) {
+            const auto timing = PerformanceStats::formatClientTiming(
+                stats.totalClientProcessingTimeUs, stats.totalQueuePacingTimeUs,
+                stats.totalRenderingTimeUs, stats.renderedFrames);
+            ret = snprintf(&output[offset], length - offset, "%s", timing.c_str());
+            if (ret < 0 || ret >= length - offset) { SDL_assert(false); return; }
+            offset += ret;
+        }
+        else if (!advancedStats || !stats.vrrPresentedFrames) {
             ret = snprintf(&output[offset], length - offset,
                            "Average frame queue delay: %.2f ms\n"
                            "Average rendering time (including monitor V-sync latency): %.2f ms\n",
@@ -1463,6 +1475,7 @@ void FFmpegVideoDecoder::stringifyVideoStats(VIDEO_STATS& stats, char* output, i
             vrr.adaptive = interval.inputPercentileEnabled;
             vrr.atLimit = stats.vrrBufferAtLimit;
             vrr.bufferUs = stats.vrrAppliedBufferUs;
+            vrr.smoothingUs = stats.vrrAppliedSmoothingUs;
             vrr.targetPpm = stats.vrrOnTimeTargetPerMillion;
             vrr.toleranceUs = interval.toleranceUs;
             vrr.nowUs = LiGetMicroseconds();
@@ -1499,28 +1512,16 @@ void FFmpegVideoDecoder::stringifyVideoStats(VIDEO_STATS& stats, char* output, i
                 reason = "Holding - current frame timing is outside the target";
                 break;
             case Action::InputPercentileGrow:
-                reason = "Increasing - experimental input percentile needs headroom";
+                reason = "Increasing - input timing needs more buffer";
                 break;
             case Action::InputPercentileRelease:
-                reason = "Shrinking - experimental input percentile needs less headroom";
+                reason = "Shrinking - input timing needs less buffer";
                 break;
             case Action::InputPercentileHold:
-                reason = "Steady - profile input percentile met";
-                break;
-            case Action::InputPercentileBackoff:
-                reason = "Shrinking slowly - recent input misses exceed profile allowance";
-                break;
-            case Action::InputPercentileMissHold:
-                snprintf(recovery, sizeof(recovery),
-                         "Paused shrinking - network/decode buffer miss; %.1f s remaining",
-                         update.holdRemainingUs / 1000000.0);
-                reason = recovery;
+                reason = "Steady - learned input target met";
                 break;
             case Action::InputPercentileUnknown:
                 reason = "Shrinking - obsolete input evidence expired (unknown workload)";
-                break;
-            case Action::AbsorbedJitterHold:
-                reason = "Holding - smaller buffer predicts input timing errors";
                 break;
             case Action::HistoryHold:
                 reason = "Holding - recent timing errors still affect the score";
@@ -1553,7 +1554,7 @@ void FFmpegVideoDecoder::stringifyVideoStats(VIDEO_STATS& stats, char* output, i
                 break;
             }
             ret = snprintf(&output[offset], length - offset,
-                "\nVRR buffer: %.2f ms added (limit %.2f ms) | %s\n"
+                "\nVRR buffer budget: %.2f ms (limit %.2f ms; not added to measured times) | %s\n"
                 "Buffer status: %s\n",
                 stats.vrrAppliedBufferUs / 1000.0, stats.vrrBufferCapUs / 1000.0,
                 stats.vrrTelemetryActive ? "Active" : "Inactive", reason);
@@ -1562,10 +1563,10 @@ void FFmpegVideoDecoder::stringifyVideoStats(VIDEO_STATS& stats, char* output, i
             if (interval.inputPercentileEnabled) {
                 const auto& input = interval.inputPercentile;
                 ret = snprintf(&output[offset], length - offset,
-                    "Adaptive buffer | profile %.2f%% frame-coverage percentile | target %.2f ms | %llu samples / %llu s%s%s\n"
+                    "Adaptive input buffer | profile %.2f%% | target %.2f ms | %llu samples / %llu s%s%s\n"
                     "Window measured frames %llu | absorbed %llu | missed %llu | interval severity score distinct\n"
                     "Frame lateness %.2f ms | buffer target %.2f ms | tolerance %.2f ms | growth %s\n"
-                    "Release %.1f us/s | last-second inputs %llu / misses %llu | proposed misses %llu\n"
+                    "Release %.1f us/s | last-second inputs %llu / misses %llu\n"
                     "Network misses %llu | decode misses %llu (stage totals)\n",
                     input.probabilityPpm / 10000.0, input.targetUs / 1000.0,
                     static_cast<unsigned long long>(input.samples),
@@ -1578,10 +1579,9 @@ void FFmpegVideoDecoder::stringifyVideoStats(VIDEO_STATS& stats, char* output, i
                     input.lastInputRequiredUs / 1000.0, input.headroomTargetUnclippedUs / 1000.0, input.toleranceUs / 1000.0,
                     input.growthBlocked ? "blocked: timing/capacity unqualified" :
                         input.lastInputEligible ? "measured frame" : "no measured frame",
-                    input.effectiveFallRateMilliUsPerSecond / 1000.0,
+                    double(input.effectiveFallRateUsPerSecond),
                     static_cast<unsigned long long>(input.recentReleaseSamples),
                     static_cast<unsigned long long>(input.recentReleaseMisses),
-                    static_cast<unsigned long long>(input.recentProposedMisses),
                     static_cast<unsigned long long>(input.cumulativeNetworkMisses),
                     static_cast<unsigned long long>(input.cumulativeDecoderMisses));
                 if (ret < 0 || ret >= length - offset) { SDL_assert(false); return; }
@@ -1639,7 +1639,7 @@ void FFmpegVideoDecoder::stringifyVideoStats(VIDEO_STATS& stats, char* output, i
                 else snprintf(presentTiming, sizeof(presentTiming), "unavailable");
                 if (advancedStats) {
                     ret = snprintf(&output[offset], length - offset,
-                        "Client timing: %s (target %.2f%%)\n"
+                        "Client timing (CPU submissions): %s (target %.2f%%)\n"
                         "Scored time: %.1fs / %s history (gaps excluded)\n"
                         "Timing error (1s avg): %s | Allowed: %.2f ms | Drops (30s): %llu\n"
                         "Present timing issues (30s): %s\n",
@@ -1652,7 +1652,7 @@ void FFmpegVideoDecoder::stringifyVideoStats(VIDEO_STATS& stats, char* output, i
                 }
                 else {
                     ret = snprintf(&output[offset], length - offset,
-                        "VRR pacing: %s | Client timing: %s / %.2f%% target%s\n"
+                        "VRR pacing: %s | Client timing (CPU submissions): %s / %.2f%% target%s\n"
                         "Scored time: %.1fs / %s history (gaps excluded)\n"
                         "Client interval error (1s): %s | Tolerance: %.2f ms | Dropped (30s): %llu\n"
                         "Present timing issues (30s): %s\n",

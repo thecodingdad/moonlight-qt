@@ -73,6 +73,10 @@ private:
         PacedFrame frame;
         FrameTraceContext trace;
         std::shared_ptr<VrrPreparedFrame> preparation;
+        // Preserve a reserved successor's observed decode boundary and wait.
+        VrrDecodeReadiness reservedReadiness;
+        uint64_t reservedReadinessObservedUs = 0;
+        bool reservedReadinessValid = false;
 
         QueuedFrame() = default;
         QueuedFrame(QueuedFrame&&) = default;
@@ -191,7 +195,7 @@ private:
     bool dequeueFrame(QueuedFrame& frame, bool& queueDiscontinuity);
     bool hasQueuedFrame();
     bool reserveReadySuccessor(bool preparedCurrent, QueuedFrame& frame,
-                               bool& queueDiscontinuity);
+                               bool& queueDiscontinuity, unsigned waitMs = 0);
     void discardQueuedFrames(bool countDrops,
                              TraceDisposition disposition);
     uint32_t consumeWindowStateNotifications();
@@ -234,6 +238,8 @@ private:
     std::atomic_bool m_CalibrationInvalidated { false };
     QByteArray m_InitialPlayoutProfile;
     bool m_CalibrationLoaded = false;
+    // Frozen after loading the startup seed, before the writer thread starts.
+    VrrTimingParameters m_TraceParameters;
     QString startDelayPath() const;
     void noteSettledDelay(uint64_t nowUs, uint64_t delayUs);
     static constexpr uint64_t kSettledDelayWarmupUs = 30000000;

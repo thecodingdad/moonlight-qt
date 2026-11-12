@@ -1402,12 +1402,7 @@ bool PlVkRenderer::acquirePendingSwapchainFrame(
         if (m_DeferredTemplateValid) {
             m_DeferredTemplate = m_SwapchainFrame;
             m_DeferredTemplate.fbo = nullptr;
-            m_DeferredTextureParams = {};
-            m_DeferredTextureParams.w = fbo->params.w;
-            m_DeferredTextureParams.h = fbo->params.h;
-            m_DeferredTextureParams.format = fbo->params.format;
-            m_DeferredTextureParams.renderable = true;
-            m_DeferredTextureParams.blit_src = true;
+            m_DeferredTextureParams = plVkOffscreenRenderTargetParams(fbo);
         }
     }
 #endif
@@ -1859,12 +1854,7 @@ void PlVkRenderer::updatePreparationTarget()
     if (!m_PreparationTargetValid) return;
     m_PreparationTarget = m_SwapchainFrame;
     m_PreparationTarget.fbo = nullptr; // Never hand a swapchain texture across threads.
-    m_PreparationTextureParams = {};
-    m_PreparationTextureParams.w = texture->params.w;
-    m_PreparationTextureParams.h = texture->params.h;
-    m_PreparationTextureParams.format = texture->params.format;
-    m_PreparationTextureParams.renderable = true;
-    m_PreparationTextureParams.blit_src = true;
+    m_PreparationTextureParams = plVkOffscreenRenderTargetParams(texture);
 }
 
 int PlVkRenderer::preparationThreadProc(void* opaque)
@@ -2422,6 +2412,35 @@ VrrPresentFeedback PlVkRenderer::presentAdaptive(const VrrPresentRequest& reques
         // Return the oldest usable completion; subsequent submissions drain
         // delayed feedback in order without collapsing intervals.
         while (m_PresentationFeedback->poll(sample)) {
+            // Keep every native outcome in the independent GPU trace before
+            // filtering it for controller use. Otherwise missing identities
+            // cannot distinguish discarded images from rejected timestamps.
+            if (m_GpuTrace) {
+                const char* event = "wayland_unavailable";
+                const char* reason = "unavailable";
+                switch (sample.outcome) {
+                case Vrr13::Outcome::Presented:
+                    event = "wayland_presented";
+                    reason = sample.presented <= 0 || sample.presented > sample.observed ?
+                        "invalid_timestamp" :
+                        sample.observed - sample.presented > 100 * Vrr13::Millisecond ?
+                        "stale" : sample.uncertainty > 500000 ? "uncertain" : "accepted";
+                    break;
+                case Vrr13::Outcome::Discarded:
+                    event = "wayland_discarded"; reason = "discarded"; break;
+                case Vrr13::Outcome::Reset:
+                    event = "wayland_reset"; reason = "clock_or_output_reset"; break;
+                case Vrr13::Outcome::Unavailable:
+                    break;
+                }
+                GpuTrace::Row row{event, -1, 0,
+                    sample.presented > 0 ? uint64_t(sample.presented / 1000) : 0,
+                    sample.observed > 0 ? uint64_t(sample.observed / 1000) : 0,
+                    sample.id, int64_t(sample.sequence), int64_t(sample.flags),
+                    int64_t(sample.refresh), sample.uncertainty, int64_t(sample.quality)};
+                SDL_strlcpy(row.detail, reason, sizeof(row.detail));
+                m_GpuTrace->record(row);
+            }
             if (sample.outcome != Vrr13::Outcome::Presented ||
                 sample.presented <= 0 || sample.presented > sample.observed ||
                 sample.observed - sample.presented > 100 * Vrr13::Millisecond ||

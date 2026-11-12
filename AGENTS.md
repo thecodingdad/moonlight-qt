@@ -282,6 +282,7 @@ Run all deterministic tests before deploying a VRR-related change or creating
 a new published release:
 
 ```bat
+vrr\release\tst_vrrbufferregressions.exe
 vrr\release\tst_vrrtimingcontroller.exe
 vrr\release\tst_vrrratepolicy.exe
 vrr\release\tst_vrrpacingworker.exe
@@ -292,8 +293,21 @@ vrr\release\vrrreplay.exe --help
 ```
 
 Finish all pacing, controller, replay, and test-source edits before this build.
-If any such source is edited afterward, run `nmake` again and rerun all seven
+If any such source is edited afterward, run `nmake` again and rerun all eight
 checks. Do not assume a successful application build rebuilt the diagnostics.
+
+`tst_vrrbufferregressions` is the adaptive-buffer regression gate. It builds
+every controller exactly as a live session does and pins no policy revision,
+so run it after any buffer, rate-layer, catch-up, smoothing or ceiling
+replacement change, not only before deployment; it takes about 9 s. Its
+`versus-fixed-refresh` scenarios fail when VRR at the display ceiling shows
+more visible stutter than the fixed-refresh pacer would on the same input.
+`KNOWN` lines are open regressions the
+shipped policy already has. They do not fail the gate. A `FAIL` line is a new
+regression, and `FIXED KNOWN REGRESSION` means its `g_Known` entry must be
+deleted. Build new controller-level tests of live behavior through
+`tests/vrr/vrrproductionsession.h`, not a default `VrrSessionConfig`. See
+`tests/vrr/README.md` for the contract map.
 
 The test executables need the deployed runtime DLLs and Qt on `PATH`. Run them
 directly from PowerShell and check `$LASTEXITCODE` after each executable. Exit
@@ -306,6 +320,7 @@ $qtBin = "C:\Users\Chase\sources\.tools\Qt\6.11.1\msvc2022_64\bin"
 $env:Path = "$deploy;$qtBin;$env:Path"
 
 $tests = @(
+    "tst_vrrbufferregressions.exe",
     "tst_vrrtimingcontroller.exe",
     "tst_vrrratepolicy.exe",
     "tst_vrrpacingworker.exe",
@@ -359,7 +374,7 @@ may continue if they remain useful.
 
 An unchanged controller must reproduce every target, submission timestamp,
 tear classification, and required diagnostic field exactly on the latest
-replay-supported capture, including schema 5 captures:
+replay-supported schema 6 capture:
 
 ```powershell
 $replay = (Resolve-Path .\build\tests-vrr\vrr\release\vrrreplay.exe).Path
@@ -535,7 +550,8 @@ are written locally under `%USERPROFILE%\vrr-traces` while gaming and copied to
 capture path to a UNC path: the tracer deliberately rejects UNC destinations
 to keep network I/O out of frame delivery.
 
-Both launchers enable schema-4 replay-grade `.vrrtrace` capture and deep diagnostics,
+Both launchers enable replay-grade `.vrrtrace` capture and deep diagnostics.
+The deployed worker determines the schema; current source emits schema 6. They
 retain at least the first 60 minutes, apply the 512 MiB cap only afterward, and
 run `vrrreplay.exe --require-exact-baseline` after capture to upload a JSON
 summary beside the trace. This exact check must continue to pass before a
